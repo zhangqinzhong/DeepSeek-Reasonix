@@ -3,24 +3,24 @@ import type { KeyboardEvent } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { app } from "../lib/bridge";
 import { useT } from "../lib/i18n";
-import type { CommandInfo, DirEntry } from "../lib/types";
+import type { CommandInfo, DirEntry, Mode } from "../lib/types";
 import { SlashMenu } from "./SlashMenu";
 import { FileMenu } from "./FileMenu";
 
 export function Composer({
   running,
-  plan,
+  mode,
   onSend,
   onCancel,
-  onTogglePlan,
+  onCycleMode,
 }: {
   running: boolean;
-  plan: boolean;
+  mode: Mode;
   onSend: (text: string) => void;
   // Returns the un-sent text when cancelling before the server replied (so it can
   // be restored to the input); undefined for a normal cancel.
   onCancel: () => string | undefined;
-  onTogglePlan: () => void;
+  onCycleMode: () => void;
 }) {
   const t = useT();
   const [text, setText] = useState("");
@@ -91,9 +91,9 @@ export function Composer({
   );
 
   // --- which menu (if any) is open --- (slash wins; they're rarely both valid)
-  const mode: "slash" | "at" | null =
+  const menuMode: "slash" | "at" | null =
     slashMatches.length > 0 && !dismissed ? "slash" : atMatches.length > 0 && !dismissed ? "at" : null;
-  const count = mode === "slash" ? slashMatches.length : mode === "at" ? atMatches.length : 0;
+  const count = menuMode === "slash" ? slashMatches.length : menuMode === "at" ? atMatches.length : 0;
 
   // Reset highlight + un-dismiss whenever the active query changes.
   useEffect(() => {
@@ -136,18 +136,18 @@ export function Composer({
   };
 
   const pickActive = () => {
-    if (mode === "slash") pickCommand(slashMatches[active]);
-    else if (mode === "at") pickEntry(atMatches[active]);
+    if (menuMode === "slash") pickCommand(slashMatches[active]);
+    else if (menuMode === "at") pickEntry(atMatches[active]);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     const composing = e.nativeEvent.isComposing;
 
-    // Shift+Tab cycles the input mode. Only plan/normal exist today, so it's a
-    // toggle. Handled before the menus so it works even while one is open.
+    // Shift+Tab cycles the input mode (normal → plan → YOLO → normal). Handled
+    // before the menus so it works even while one is open.
     if (e.key === "Tab" && e.shiftKey && !composing) {
       e.preventDefault();
-      onTogglePlan();
+      onCycleMode();
       return;
     }
 
@@ -189,18 +189,18 @@ export function Composer({
 
   return (
     <div className="composer-wrap">
-      {mode === "slash" && (
+      {menuMode === "slash" && (
         <SlashMenu items={slashMatches} activeIndex={active} onPick={pickCommand} onHover={setActive} />
       )}
-      {mode === "at" && <FileMenu items={atMatches} activeIndex={active} onPick={pickEntry} onHover={setActive} />}
+      {menuMode === "at" && <FileMenu items={atMatches} activeIndex={active} onPick={pickEntry} onHover={setActive} />}
       <button
-        className={`composer__mode ${plan ? "composer__mode--on" : ""}`}
-        onClick={onTogglePlan}
-        title={plan ? t("composer.exitPlanTitle") : t("composer.enterPlanTitle")}
+        className={`composer__mode composer__mode--${mode}`}
+        onClick={onCycleMode}
+        title={t("composer.modeTitle")}
       >
         <span className="composer__mode-dot" />
-        {plan ? t("composer.planModeOn") : t("composer.planMode")}
-        <span className="composer__mode-hint">{plan ? t("composer.planHintExit") : t("composer.planHint")}</span>
+        {mode === "yolo" ? t("composer.modeYolo") : mode === "plan" ? t("composer.modePlan") : t("composer.modeNormal")}
+        <span className="composer__mode-hint">{t("composer.modeHint")}</span>
       </button>
       <div className="composer">
         <span className="composer__caret">›</span>

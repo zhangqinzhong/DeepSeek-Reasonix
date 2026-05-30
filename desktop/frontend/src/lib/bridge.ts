@@ -74,6 +74,9 @@ export interface AppBindings {
   SetSandbox(bash: string, network: boolean, workspaceRoot: string, allowWrite: string[]): Promise<void>;
   SetAgentParams(temperature: number, maxSteps: number, systemPrompt: string): Promise<void>;
   SetLanguage(lang: string): Promise<void>;
+  // SetBypass toggles YOLO mode (auto-approve every tool call this session; deny
+  // rules still apply). Runtime-only — not written to config.
+  SetBypass(on: boolean): Promise<void>;
 }
 
 interface WailsRuntime {
@@ -179,6 +182,7 @@ function makeMockApp(): AppBindings {
     language: "",
     configPath: "~/projects/reasonix/reasonix.toml",
     providerKinds: ["openai"],
+    bypass: false,
   };
   return {
     async Submit(input) {
@@ -279,6 +283,7 @@ function makeMockApp(): AppBindings {
         ready: true,
         eventChannel: EVENT_CHANNEL,
         cwd,
+        bypass: settings.bypass,
       };
     },
     async Commands() {
@@ -394,6 +399,9 @@ function makeMockApp(): AppBindings {
     },
     async SetLanguage(lang: string) {
       settings.language = lang;
+    },
+    async SetBypass(on: boolean) {
+      settings.bypass = on;
     },
   };
 }

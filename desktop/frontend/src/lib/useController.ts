@@ -421,6 +421,11 @@ export function useController() {
     app.SetPlanMode(on).catch(() => {});
   }, []);
 
+  // setBypass toggles YOLO mode (auto-approve every tool call this session).
+  const setBypass = useCallback((on: boolean) => {
+    app.SetBypass(on).catch(() => {});
+  }, []);
+
   const newSession = useCallback(async () => {
     await app.NewSession().catch(() => {});
     dispatch({ type: "reset" });
@@ -516,6 +521,7 @@ export function useController() {
     approve,
     answerQuestion,
     setPlan,
+    setBypass,
     newSession,
     listSessions,
     resumeSession,

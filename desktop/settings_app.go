@@ -66,6 +66,9 @@ type SettingsView struct {
 	// registered (provider.Kinds()), so the editor's "kind" picker offers only
 	// kinds that resolve — selecting an unregistered one would fail the rebuild.
 	ProviderKinds []string `json:"providerKinds"`
+	// Bypass is the live YOLO state (runtime-only, not from config), so the panel's
+	// toggle reflects whether approvals are currently being skipped this session.
+	Bypass bool `json:"bypass"`
 }
 
 func nonNil(s []string) []string {
@@ -103,6 +106,7 @@ func (a *App) Settings() SettingsView {
 		Language:      cfg.Language,
 		ConfigPath:    config.SourcePath(),
 		ProviderKinds: provider.Kinds(),
+		Bypass:        a.ctrl != nil && a.ctrl.Bypass(),
 	}
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]

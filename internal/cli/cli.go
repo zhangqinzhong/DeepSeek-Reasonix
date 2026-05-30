@@ -181,6 +181,8 @@ func chatREPL(args []string) int {
 	cont := fs.Bool("continue", false, "resume the most recent saved session")
 	fs.BoolVar(cont, "c", false, "shorthand for --continue")
 	resume := fs.Bool("resume", false, "list saved sessions and pick one to resume")
+	yolo := fs.Bool("dangerously-skip-permissions", false, "YOLO: auto-approve every tool call this session (deny rules still apply)")
+	fs.BoolVar(yolo, "yolo", false, "alias for --dangerously-skip-permissions")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -261,6 +263,10 @@ func chatREPL(args []string) int {
 	// event and blocks until the user answers via ctrl.Approve. Sub-agents (the
 	// task tool) keep their headless gate from setup — no UI to prompt through.
 	ctrl.EnableInteractiveApproval()
+	// YOLO: skip every approval prompt for the session (deny rules still apply).
+	if *yolo {
+		ctrl.SetBypass(true)
+	}
 
 	m := newChatTUI(ctrl, missing, eventCh, termW)
 	// No alt-screen: finalized transcript lines are committed to the terminal's

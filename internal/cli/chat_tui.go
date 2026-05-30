@@ -315,6 +315,8 @@ func (m chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.unsendPending()
 			case m.state == tuiRunning:
 				m.ctrl.Cancel()
+			case m.ctrl.Bypass():
+				m.ctrl.SetBypass(false) // back out of YOLO
 			case m.planMode:
 				m.planMode = false
 				m.ctrl.SetPlanMode(false)
@@ -338,8 +340,7 @@ func (m chatTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == tuiRunning {
 				break
 			}
-			m.planMode = !m.planMode
-			m.ctrl.SetPlanMode(m.planMode)
+			m.cycleMode()
 			return m, nil
 		case "enter":
 			if m.state == tuiRunning {
@@ -657,9 +658,12 @@ func (m chatTUI) View() tea.View {
 	box := inputBoxStyle.Width(boxW).Render(m.input.View())
 
 	var modeTag string
-	if m.planMode {
+	switch {
+	case m.ctrl.Bypass():
+		modeTag = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true).Render("[YOLO]")
+	case m.planMode:
 		modeTag = yellow("[plan]")
-	} else {
+	default:
 		modeTag = dim("[auto]")
 	}
 
@@ -902,6 +906,24 @@ func (m *chatTUI) growInputToFit() {
 	}
 	if lines != m.input.Height() {
 		m.input.SetHeight(lines)
+	}
+}
+
+// cycleMode advances the input mode normal → plan → YOLO → normal (Tab),
+// mirroring the desktop composer's Shift+Tab. plan is read-only; YOLO
+// auto-approves every tool call for the session (deny rules still apply). The
+// status line's mode tag ([auto]/[plan]/[YOLO]) reflects the result.
+func (m *chatTUI) cycleMode() {
+	switch {
+	case m.ctrl.Bypass():
+		m.ctrl.SetBypass(false) // YOLO → normal
+	case m.planMode:
+		m.planMode = false
+		m.ctrl.SetPlanMode(false)
+		m.ctrl.SetBypass(true) // plan → YOLO
+	default:
+		m.planMode = true
+		m.ctrl.SetPlanMode(true) // normal → plan
 	}
 }
 

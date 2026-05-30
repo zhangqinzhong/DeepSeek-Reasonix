@@ -106,7 +106,12 @@ export interface Meta {
   startupErr?: string;
   eventChannel: string;
   cwd: string;
+  bypass?: boolean; // YOLO mode on (auto-approve every tool call)
 }
+
+// Mode is the input mode cycled by Shift+Tab: normal → plan (read-only) → yolo
+// (auto-approve every tool call; deny rules still apply).
+export type Mode = "normal" | "plan" | "yolo";
 
 export interface CommandInfo {
   name: string; // without the leading slash
@@ -215,4 +220,5 @@ export interface SettingsView {
   language: string;
   configPath: string;
   providerKinds: string[]; // provider implementations the kernel registered (for the kind picker)
+  bypass: boolean; // live YOLO state (runtime-only) — whether approvals are skipped this session
 }

@@ -376,6 +376,7 @@ type Meta struct {
 	StartupErr   string `json:"startupErr,omitempty"`
 	EventChannel string `json:"eventChannel"`
 	Cwd          string `json:"cwd"`
+	Bypass       bool   `json:"bypass"` // YOLO mode on (auto-approve every tool call)
 }
 
 // Meta reports the model label, readiness, any startup error, the working
@@ -389,6 +390,16 @@ func (a *App) Meta() Meta {
 		StartupErr:   a.startupErr,
 		EventChannel: eventChannel,
 		Cwd:          cwd,
+		Bypass:       a.ctrl != nil && a.ctrl.Bypass(),
+	}
+}
+
+// SetBypass toggles YOLO mode for the session: auto-approve every tool call
+// (writers and bash run without asking). Deny rules still apply. Runtime-only —
+// not written to config, so it resets on relaunch.
+func (a *App) SetBypass(on bool) {
+	if a.ctrl != nil {
+		a.ctrl.SetBypass(on)
 	}
 }
 

@@ -89,6 +89,13 @@ type Controller struct {
 	// execution turn returns.
 	autoApprove bool
 
+	// bypass is "YOLO" mode: while set, every approval prompt is auto-allowed for
+	// the rest of the session (writers and bash run without asking). It is a
+	// deliberate, session-scoped opt-in (the --dangerously-skip-permissions flag or
+	// a runtime toggle), never persisted. Deny rules are unaffected — they're
+	// resolved before the approver, so a denied tool is still blocked in YOLO mode.
+	bypass bool
+
 	// pendingMemory holds memory notes added mid-session (via "#" quick-add or a
 	// memory edit) that haven't yet been folded into a turn. Compose drains it
 	// onto the next outgoing turn — never into the cache-stable system prefix — so
@@ -660,6 +667,22 @@ func (c *Controller) Jobs() []jobs.View {
 	return c.jobs.Running()
 }
 
+// SetBypass turns YOLO/bypass mode on or off for the session: while on, every
+// approval prompt is auto-allowed (writers and bash run without asking). Deny
+// rules still block. Runtime-only — never written to config.
+func (c *Controller) SetBypass(on bool) {
+	c.mu.Lock()
+	c.bypass = on
+	c.mu.Unlock()
+}
+
+// Bypass reports whether YOLO/bypass mode is on, for the status-bar indicator.
+func (c *Controller) Bypass() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bypass
+}
+
 // --- memory ---
 //
 // c.mem is treated as an immutable snapshot guarded by c.mu: reads take the lock
@@ -736,10 +759,11 @@ func (c *Controller) refreshMemoryLocked() {
 type gateApprover struct{ c *Controller }
 
 func (g gateApprover) Approve(ctx context.Context, tool, subject string, args json.RawMessage) (bool, bool, error) {
-	// While executing a just-approved plan, writers are pre-cleared — the plan was
-	// the approval — so don't prompt again.
+	// Auto-allow without prompting while executing a just-approved plan (the plan
+	// was the approval) or while YOLO/bypass mode is on. Deny rules already bit
+	// before this point, so they still block.
 	g.c.mu.Lock()
-	auto := g.c.autoApprove
+	auto := g.c.autoApprove || g.c.bypass
 	g.c.mu.Unlock()
 	if auto {
 		return true, false, nil

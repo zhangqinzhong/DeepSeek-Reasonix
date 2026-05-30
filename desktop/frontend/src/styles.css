@@ -996,6 +996,14 @@ body {
   color: var(--accent);
   letter-spacing: 0.6px;
 }
+.statusbar__yolo {
+  color: #fff;
+  background: var(--danger, #e5484d);
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+}
 
 /* model switcher (bottom-of-window popover) */
 .modelsw {
@@ -1914,14 +1922,25 @@ body {
   color: var(--fg-dim);
   border-color: var(--fg-faint);
 }
-/* engaged state — the prominent accent pill */
-.composer__mode--on {
+/* plan: the prominent accent pill */
+.composer__mode--plan {
   background: var(--accent-soft);
   border-color: transparent;
   color: var(--accent);
 }
-.composer__mode--on:hover {
+.composer__mode--plan:hover {
   color: var(--accent);
+  border-color: transparent;
+}
+/* yolo: an alarming red pill — every approval is being skipped */
+.composer__mode--yolo {
+  background: var(--danger, #e5484d);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+}
+.composer__mode--yolo:hover {
+  color: #fff;
   border-color: transparent;
 }
 .composer__mode-dot {
@@ -1931,10 +1950,16 @@ body {
   background: var(--fg-faint);
   flex-shrink: 0;
 }
-.composer__mode--on .composer__mode-dot {
+.composer__mode--plan .composer__mode-dot {
   background: var(--accent);
+}
+.composer__mode--yolo .composer__mode-dot {
+  background: #fff;
 }
 .composer__mode-hint {
   color: var(--fg-faint);
   font-size: 11px;
+}
+.composer__mode--yolo .composer__mode-hint {
+  color: rgba(255, 255, 255, 0.8);
 }
