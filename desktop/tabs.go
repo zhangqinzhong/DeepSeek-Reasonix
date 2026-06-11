@@ -216,6 +216,12 @@ func (s *tabEventSink) Emit(e event.Event) {
 		case event.TurnDone:
 			s.recordTurnDone()
 		}
+		if m := s.app.metrics.Load(); m != nil {
+			m.observe(e)
+			if e.Kind == event.TurnDone {
+				m.persist()
+			}
+		}
 	}
 	if s.ctx != nil {
 		runtime.EventsEmit(s.ctx, eventChannel, toWireTab(e, s.tabID))
