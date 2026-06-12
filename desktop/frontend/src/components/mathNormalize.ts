@@ -8,7 +8,7 @@
 //   4. Inline `$$` glued to prose gets a blank line inserted before it
 //      (CommonMark requires that block math be paragraph-separated).
 //   5. $$…$$ → display placeholders, $…$ → inline placeholders, gated by
-//      isLikelyInlineMath so currency / env-var tokens pass through.
+//      isLikelyInlineMath; currency / env-var tokens become &#36; entities.
 //   6. Each recognised math source is run through latexNormalizeForKatex
 //      (text-mode escapes, |→\vert, %→\%).
 
@@ -81,11 +81,12 @@ function normalizeMathText(s: string): string {
     return `${IM}${latexNormalizeForKatex(m)}${IM}`;
   });
 
-  // Step 6: remaining $…$ → classifier-gated inline math. Non-math
-  // pairs (e.g. currency like "$5 and $6") are left unchanged so the
-  // dollars remain visible; remark-math will not try to parse them.
+  // Step 6: remaining $…$ → classifier-gated inline math. remark-math
+  // parses any literal $…$ it sees, so non-math pairs (currency $5,
+  // env vars $PATH$) are wrapped in &#36; entities — remark-math never
+  // sees a $, and the decoded entity still renders as a literal dollar.
   r = r.replace(/\$([^$\n]+)\$/g, (_m, m) => {
-    if (!isLikelyInlineMath(m.trim())) return _m;
+    if (!isLikelyInlineMath(m.trim())) return `${DOLLAR}${m}${DOLLAR}`;
     return `${IM}${latexNormalizeForKatex(m)}${IM}`;
   });
 

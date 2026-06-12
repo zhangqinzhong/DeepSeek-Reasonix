@@ -6,6 +6,12 @@
 // mathClassify) rather than reimplementing them inline, so this file
 // catches regressions in the actual code path that runs inside <Markdown>.
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import katex from "katex";
 import { latexNormalizeForKatex, stripMathDelimiters } from "../components/latexNormalize";
 import { isLikelyInlineMath } from "../components/mathClassify";
@@ -232,12 +238,12 @@ check("digit before $$ is NOT a prose boundary (preserves c^2$$)", () => {
 
 console.log("\nnormalizeMath — non-math dollar filtering");
 eq(normalizeMath("costs $1$ today"), "costs $1$ today", "$1$ is math (single-digit index)");
-eq(normalizeMath("env $PATH$ here"), "env $PATH$ here", "$PATH$ not math (env var, dollars preserved)");
+eq(normalizeMath("env $PATH$ here"), "env &#36;PATH&#36; here", "$PATH$ not math (env var → &#36; entities so remark-math leaves it literal)");
 eq(normalizeMath("solve $x^2 + y^2 = z^2$ please"), "solve $x^2 + y^2 = z^2$ please", "$x^2+y^2$ is math");
 eq(normalizeMath("$\\alpha + \\beta$"), "$\\alpha + \\beta$", "$\\alpha+\\beta$ is math");
 eq(normalizeMath("price is $10.50$ each"), "price is $10.50$ each", "$10.50$ is math (decimal number)");
 eq(normalizeMath("$I$ think"), "$I$ think", "$I$ is math (uppercase single letter)");
-eq(normalizeMath("it costs $5 and $10 total"), "it costs $5 and $10 total", "multiple prose $ stays literal (dollars preserved)");
+eq(normalizeMath("it costs $5 and $10 total"), "it costs &#36;5 and &#36;10 total", "multiple prose $ → &#36; entities (dollars preserved, not parsed as math)");
 
 console.log("\nnormalizeMath — Markdown code regions stay literal");
 eq(normalizeMath("`$PATH$`"), "`$PATH$`", "inline code with env token");
@@ -352,9 +358,6 @@ for (const [src, label] of e2e) {
 console.log("\nnormalizeMath — non-math inputs pass through");
 type Passthrough = { src: string; expected: string; label: string };
 const passthrough: Passthrough[] = [
-  // $5$ is filtered to dollar entities so remark-math leaves it literal
-  // and the rendered prose still shows normal dollar signs.
-  // (the previous "costs $5$ today" passthrough case is now a no-op — single-digit $N$ is math)
   { src: "costs $100$ today", expected: "costs $100$ today", label: "multi-digit number is math" },
   { src: "line break \\\\[4pt] here", expected: "line break \\\\[4pt] here", label: "LaTeX line-break spacing" },
   { src: "hello world", expected: "hello world", label: "plain text" },
@@ -362,6 +365,38 @@ const passthrough: Passthrough[] = [
 for (const { src, expected, label } of passthrough) {
   check(`${label}: ${src}`, () => normalizeMath(src) === expected);
 }
+
+// ── remark-math render boundary ────────────────────────────────────────────────
+// A literal $…$ in normalizeMath output is NOT enough to keep a non-math token
+// out of KaTeX: remark-math parses any $…$ it sees, so the classifier's reject
+// verdict only holds when the $ is hidden as a &#36; entity. These render through
+// the real react-markdown + remark-math + rehype-katex path; the normalizeMath-only
+// golden cases above never cross the prose→parser boundary.
+
+console.log("\nnormalizeMath → remark-math render boundary");
+
+function renderHtml(src: string): string {
+  return renderToStaticMarkup(
+    createElement(ReactMarkdown, {
+      remarkPlugins: [remarkGfm, remarkMath],
+      rehypePlugins: [rehypeKatex],
+      children: normalizeMath(src),
+    }),
+  );
+}
+
+check("currency '$5 and $6' renders as literal dollars, not math", () => {
+  const html = renderHtml("These two apples cost $5 and $6");
+  return !html.includes("katex") && html.includes("$5") && html.includes("$6");
+});
+check("env var $PATH$ renders as literal, not math", () => {
+  const html = renderHtml("env $PATH$ here");
+  return !html.includes("katex") && html.includes("$PATH$");
+});
+check("real inline math $x^2$ still renders as KaTeX", () => {
+  const html = renderHtml("the value $x^2$ here");
+  return html.includes("katex");
+});
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
