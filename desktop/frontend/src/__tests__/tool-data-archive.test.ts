@@ -8,6 +8,9 @@
 import { initialState, reducer } from "../lib/useController";
 import type { Item } from "../lib/useController";
 
+type TestState = typeof initialState;
+type ToolItem = Extract<Item, { kind: "tool" }>;
+
 let passed = 0;
 let failed = 0;
 
@@ -31,33 +34,20 @@ function ok(cond: boolean, label: string) {
   }
 }
 
-function makeTool(id: string, argsLen = 5000, outputLen = 10000): Item {
-  return {
-    kind: "tool",
-    id,
-    name: "bash",
-    args: "x".repeat(argsLen),
-    readOnly: false,
-    status: "done",
-    output: "y".repeat(outputLen),
-    durationMs: 100,
-  };
-}
-
 /** Run tool_dispatch + tool_result for each item and return final state. */
-function addTools(state: ReturnType<typeof initialState>, count: number, argsLen = 5000, outputLen = 10000): ReturnType<typeof initialState> {
+function addTools(state: TestState, count: number, argsLen = 5000, outputLen = 10000): TestState {
   let s = state;
   for (let i = 0; i < count; i++) {
     const id = `t${i}`;
     s = reducer(s, { type: "event", e: { kind: "turn_started" } });
     s = reducer(s, { type: "event", e: { kind: "tool_dispatch", tool: { id, name: "bash", args: "x".repeat(argsLen), readOnly: false } } });
-    s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id, output: "y".repeat(outputLen), durationMs: 100 } } });
+    s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id, name: "bash", readOnly: false, output: "y".repeat(outputLen), durationMs: 100 } } });
   }
   return s;
 }
 
-function toolItems(s: ReturnType<typeof initialState>): (Item & { dataArchived?: boolean })[] {
-  return s.items.filter((it) => it.kind === "tool") as any;
+function toolItems(s: TestState): ToolItem[] {
+  return s.items.filter((it): it is ToolItem => it.kind === "tool");
 }
 
 console.log("\ntool data archiving on tool_result");
@@ -90,7 +80,7 @@ console.log("\ntool data archiving on tool_result");
   let s = initialState;
   s = reducer(s, { type: "event", e: { kind: "turn_started" } });
   s = reducer(s, { type: "event", e: { kind: "tool_dispatch", tool: { id: "noop", name: "glob", args: JSON.stringify({ pattern: "**/*" }), readOnly: true } } });
-  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "noop", output: undefined, durationMs: 5 } } });
+  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "noop", name: "glob", readOnly: true, output: undefined, durationMs: 5 } } });
   const tools = toolItems(s);
   ok(tools.length >= 1, "no crash when tool output is undefined");
 }
@@ -108,7 +98,7 @@ console.log("\ntool data archiving on tool_result");
   eq(before[0].args, '{"command":"echo hello"}', "running tool keeps full args");
 
   // After tool_result: archived
-  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "run1", output: "hello world", durationMs: 50 } } });
+  s = reducer(s, { type: "event", e: { kind: "tool_result", tool: { id: "run1", name: "bash", readOnly: false, output: "hello world", durationMs: 50 } } });
   const after = toolItems(s);
   ok(after[0].dataArchived === true, "tool archived after result");
   eq(after[0].output, undefined, "output dropped after result");

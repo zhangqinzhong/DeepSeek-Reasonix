@@ -64,6 +64,7 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
   // the in-memory copy was archived for memory efficiency.
   const [fullData, setFullData] = useState<{ args: string; output?: string } | null>(null);
   const effectiveArgs = fullData?.args ?? item.args;
+  const effectiveOutput = fullData?.output ?? item.output;
   const diffs = diffsFor(item.name, effectiveArgs);
   const subject = subjectOf(item.name, effectiveArgs);
   // Reset cached fullData when the item identity changes (e.g. after rewind).
@@ -74,10 +75,10 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
   // edit diffs are the point of the card, so they're shown inline; everything
   // else folds its args/output away by default.  Open while running so the
   // user sees progress; closed by default once settled.
-  const hasArgsOrOutput = diffs.length === 0 && (!!item.args || !!item.output);
+  const hasArgsOrOutput = diffs.length === 0 && (!!effectiveArgs || !!effectiveOutput || item.dataArchived);
 
   // Shell output: split into preview + "show all" toggle.
-  const shellOutput = item.isShell && item.output ? item.output : null;
+  const shellOutput = item.isShell && effectiveOutput ? effectiveOutput : null;
   const shellPreview = shellOutput ? splitPreview(shellOutput, SHELL_PREVIEW_LINES) : null;
   const hasBody = Boolean(diffs.length || hasNested || shellPreview || (!shellPreview && hasArgsOrOutput) || item.error);
   useEffect(() => {
@@ -186,9 +187,9 @@ export const ToolCard = memo(function ToolCard({ item, subcalls }: { item: ToolI
         {!shellPreview && hasArgsOrOutput && (
           <>
             {effectiveArgs && <CodeViewer value={pretty(effectiveArgs)} language="json" maxHeight={180} />}
-            {(fullData?.output ?? item.output) && (
+            {effectiveOutput && (
               <>
-                <CodeViewer value={fullData?.output ?? item.output ?? ""} maxHeight={280} />
+                <CodeViewer value={effectiveOutput} maxHeight={280} />
                 {item.truncated && <div className="tool__note">{t("tool.truncated")}</div>}
               </>
             )}

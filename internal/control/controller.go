@@ -2110,7 +2110,7 @@ func (c *Controller) ToolResult(toolID string) *ToolResultData {
 	if c.executor == nil {
 		return nil
 	}
-	msgs := c.executor.Session().Messages
+	msgs := c.executor.Session().Snapshot()
 	// Search backwards: tool result first (most recent), then find the args
 	// from the preceding assistant turn.
 	for i := len(msgs) - 1; i >= 0; i-- {
