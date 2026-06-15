@@ -165,5 +165,40 @@ console.log("\ntool data archiving on tool_result");
   ok(totalStringBytes < args.length + output.length, "history restore avoids large args/output strings");
 }
 
+// ── Test 7: Restored todo_write keeps full structured args for the todo panel ──
+{
+  const todos = Array.from({ length: 8 }, (_, i) => ({
+    content: `Task ${i} ${"x".repeat(30)}`,
+    status: i === 0 ? "in_progress" : "pending",
+  }));
+  const args = JSON.stringify({ todos });
+  const s = reducer(initialState, {
+    type: "history",
+    messages: [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [{
+          id: "todo-long",
+          name: "todo_write",
+          arguments: args,
+        }],
+      },
+      {
+        role: "tool",
+        content: "",
+        toolCallId: "todo-long",
+        toolName: "todo_write",
+        toolResultArchived: true,
+      },
+    ] as any,
+  });
+  const tools = toolItems(s);
+  const todo = tools.find((tool) => tool.name === "todo_write");
+  ok(Boolean(todo), "history restored todo_write");
+  eq(todo?.args, args, "todo_write args are not truncated during history restore");
+  eq(JSON.parse(todo?.args ?? "{}").todos.length, todos.length, "todo_write args remain parseable JSON");
+}
+
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
 if (failed > 0) process.exit(1);

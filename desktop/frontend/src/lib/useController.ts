@@ -603,6 +603,7 @@ export function reducer(s: State, a: Action): State {
       const archived = items.map((it) => {
         if (it.kind !== "tool") return it;
         const t = it;
+        if (t.name === "todo_write") return it;
         const shortArgs = t.args && t.args.length > 200 ? t.args.slice(0, 200) + "…" : t.args;
         if (shortArgs === t.args && (t.output === undefined || t.output === "")) return it;
         return { ...t, args: shortArgs, output: undefined, dataArchived: true };
