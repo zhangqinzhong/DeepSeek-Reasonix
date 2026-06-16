@@ -44,6 +44,24 @@ eq(payload.componentStack, "component stack", "captures component stack");
 eq(payload.message.includes("[unhandledrejection]"), true, "keeps human-readable message");
 eq(shouldReportGlobalCrashEvent({ defaultPrevented: false }), true, "reports unhandled global events by default");
 eq(shouldReportGlobalCrashEvent({ defaultPrevented: true }), false, "ignores global events already handled by a filter");
+eq(
+  shouldReportGlobalCrashEvent({ defaultPrevented: false, message: "ResizeObserver loop limit exceeded" }),
+  false,
+  "ignores Chromium ResizeObserver loop limit notices",
+);
+eq(
+  shouldReportGlobalCrashEvent({
+    defaultPrevented: false,
+    message: "ResizeObserver loop completed with undelivered notifications.",
+  }),
+  false,
+  "ignores Chromium ResizeObserver undelivered notification notices",
+);
+eq(
+  shouldReportGlobalCrashEvent({ defaultPrevented: false, error: new Error("ResizeObserver loop limit exceeded") }),
+  false,
+  "ignores ResizeObserver notices delivered through ErrorEvent.error",
+);
 
 const perf: PerformanceSnapshot = {
   reason: "event loop lag 1300ms",
