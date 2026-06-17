@@ -162,6 +162,24 @@ ok(
   "macOS workbench leaves safe space for inset window controls",
 );
 
+ok(
+  finalDeclaration(".app--darwin .layout--workbench-chrome-hidden.layout--workspace-maximized .workbench-dock__tools", "padding-left") === "96px",
+  "macOS maximized workbench dock leaves safe space for inset window controls",
+);
+
+ok(
+  /@media \(max-width: 820px\) \{[\s\S]*\.app--darwin \.layout--workbench-chrome-hidden \.topicbar\s*\{[\s\S]*padding-left:\s*96px;/.test(stylesSource) &&
+    /@media \(max-width: 820px\) \{[\s\S]*\.app--darwin \.layout--workbench-chrome-hidden\.layout--workspace-maximized \.workbench-dock__tools\s*\{[\s\S]*padding-left:\s*96px;/.test(stylesSource),
+  "macOS workbench keeps safe space when responsive CSS hides the sidebar",
+);
+
+ok(
+  finalDeclaration(".workbench-dock__tools", "--wails-draggable") === "drag" &&
+    finalDeclaration(".workbench-dock__tabs", "--wails-draggable") === "no-drag" &&
+    finalDeclaration(".workbench-dock__tab", "--wails-draggable") === "no-drag",
+  "maximized workbench dock keeps a draggable title region while tabs remain clickable",
+);
+
 for (const selector of [
   ":root[data-theme-style] .layout--workbench-chrome-hidden .topicbar",
   ":root[data-theme-style] .layout--workbench-chrome-hidden .topicbar__chrome-btn",
