@@ -121,6 +121,8 @@ type App struct {
 
 	skillRootsMu    sync.Mutex
 	skillRootsCache skillRootsCache
+
+	heartbeat *HeartbeatEngine // scheduled heartbeat tasks; nil until startup
 }
 
 type skillRootsCache struct {
@@ -330,6 +332,9 @@ func (a *App) startup(ctx context.Context) {
 		a.recordSettingsMetricsSnapshot(cfg)
 	}
 
+	a.heartbeat = newHeartbeatEngine(a)
+	a.heartbeat.Start()
+
 	go a.restoreOrBuildTabs()
 	a.goSafe("refreshBotRuntime", a.refreshBotRuntime)
 	a.goSafe("sendStartupPing", a.sendStartupPing)
@@ -529,6 +534,9 @@ func (a *App) snapshotAllTabs() {
 
 // shutdown snapshots all tabs, saves the final window geometry, and closes tabs.
 func (a *App) shutdown(context.Context) {
+	if a.heartbeat != nil {
+		a.heartbeat.Stop()
+	}
 	a.stopBotRuntime()
 	a.stopTray()
 	// Save window geometry synchronously from Go so it's persisted even if the
