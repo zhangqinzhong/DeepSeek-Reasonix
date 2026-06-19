@@ -55,13 +55,30 @@ func TestListSessions_EmptyDir(t *testing.T) {
 	}
 }
 
+func TestToolSchemasAreValidJSON(t *testing.T) {
+	dir := t.TempDir()
+	for _, tool := range []struct {
+		name   string
+		schema json.RawMessage
+	}{
+		{name: "list_sessions", schema: NewListSessionsTool(dir).Schema()},
+		{name: "read_session", schema: NewReadSessionTool(dir).Schema()},
+	} {
+		if !json.Valid(tool.schema) {
+			t.Fatalf("%s schema is invalid JSON: %s", tool.name, tool.schema)
+		}
+	}
+}
+
 func TestListSessions_OnlyCleanupPending(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "20260618-120000.000000000-test-model.jsonl")
 	writeSessionJSONL(t, sessionPath, []provider.Message{
 		{Role: provider.RoleUser, Content: "hello"},
 	})
-	agent.MarkCleanupPending(sessionPath, "delete")
+	if err := agent.MarkCleanupPending(sessionPath, "delete"); err != nil {
+		t.Fatal(err)
+	}
 
 	tool := NewListSessionsTool(dir)
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -218,7 +235,9 @@ func TestReadSession_RejectsCleanupPending(t *testing.T) {
 	writeSessionJSONL(t, sessionPath, []provider.Message{
 		{Role: provider.RoleUser, Content: "data"},
 	})
-	agent.MarkCleanupPending(sessionPath, "delete")
+	if err := agent.MarkCleanupPending(sessionPath, "delete"); err != nil {
+		t.Fatal(err)
+	}
 
 	tool := NewReadSessionTool(dir)
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"session":"session.jsonl"}`))
@@ -338,7 +357,9 @@ func TestCleanupPendingContract(t *testing.T) {
 	})
 
 	// Mark cleanup-pending using the REAL agent function
-	agent.MarkCleanupPending(sessionPath, "delete")
+	if err := agent.MarkCleanupPending(sessionPath, "delete"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify both agent and our read_session detect it
 	if !agent.IsCleanupPending(sessionPath) {
