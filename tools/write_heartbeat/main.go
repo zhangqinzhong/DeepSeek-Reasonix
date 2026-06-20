@@ -19,7 +19,7 @@ type Task struct {
 	TopicID      string `json:"topicId,omitempty"`
 	LastRunAt    int64  `json:"lastRunAt,omitempty"`
 	CreatedAt    int64  `json:"createdAt,omitempty"`
-	ApprovalMode string `json:"approvalMode,omitempty"`
+	ApprovalMode string `json:"approvalMode"`
 }
 
 func main() {

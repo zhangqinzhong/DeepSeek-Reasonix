@@ -37,7 +37,7 @@ type HeartbeatTask struct {
 	TopicID       string `json:"topicId,omitempty"`       // created topic, reused on re-run
 	LastRunAt     int64  `json:"lastRunAt,omitempty"`     // unix millis
 	CreatedAt     int64  `json:"createdAt,omitempty"`
-	ApprovalMode  string `json:"approvalMode,omitempty"` // "ask" | "auto" | "yolo"; empty defaults to "yolo"
+	ApprovalMode  string `json:"approvalMode"`            // "ask" | "auto" | "yolo"; empty defaults to "yolo"
 }
 
 // heartbeatConfig is the on-disk format.

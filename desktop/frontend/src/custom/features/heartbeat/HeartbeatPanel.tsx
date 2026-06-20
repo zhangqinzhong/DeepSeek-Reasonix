@@ -532,6 +532,8 @@ const WEEKDAYS = [
   { key: "sun", label: "周日" },
 ] as const;
 
+const ALL_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
 function CycleEditor({
   draft,
   setDraft,
@@ -547,7 +549,8 @@ function CycleEditor({
   const cycleDays = cycleMatch?.[3] || "";
   const cycleTime = cycleMatch?.[4] || "09:00";
   const [selectedDays, setSelectedDays] = useState<string[]>(
-    cycleDays ? cycleDays.split(",") : []
+    cycleDays ? cycleDays.split(",") :
+    cycleMatch && cycleMatch[2] === "daily" ? [...ALL_WEEKDAYS] : []
   );
   const [monthDay, setMonthDay] = useState(cycleDays || "1");
   const [yearMonth, setYearMonth] = useState(cycleDays.split("-")[0] || "1");
@@ -563,12 +566,15 @@ function CycleEditor({
       monthly: "720h",
       yearly: "8760h",
     };
-    let suffix = `|${ct}`;
-    if (ct === "weekly" || ct === "biweekly") {
+    // If daily with specific day selection, switch to weekly format
+    const isDailyWithSelection = ct === "daily" && days.length > 0 && days.length < 7;
+    const effectiveType = isDailyWithSelection ? "weekly" : ct;
+    let suffix = `|${effectiveType}`;
+    if (effectiveType === "weekly" || effectiveType === "biweekly") {
       suffix += `:${days.join(",")}`;
-    } else if (ct === "monthly") {
+    } else if (effectiveType === "monthly") {
       suffix += `:${days[0] || "1"}`;
-    } else if (ct === "yearly") {
+    } else if (effectiveType === "yearly") {
       // days[0] = month, days[1] = day — each is a plain number, no dash
       suffix += `:${days[0] || "1"}-${days[1] || "1"}`;
     }
@@ -578,7 +584,7 @@ function CycleEditor({
 
   const onCycleTypeChange = useCallback((ct: string) => {
     setCycleType(ct);
-    const days: string[] = [];
+    const days = (ct === "daily" || ct === "weekly" || ct === "biweekly") ? [...ALL_WEEKDAYS] : [];
     setSelectedDays(days);
     setMonthDay("1");
     setYearMonth("1");
@@ -611,7 +617,7 @@ function CycleEditor({
 
   const onTimeChange = useCallback((tm: string) => {
     setTimeVal(tm);
-    const days = cycleType === "weekly" || cycleType === "biweekly" ? selectedDays
+    const days = cycleType === "daily" || cycleType === "weekly" || cycleType === "biweekly" ? selectedDays
       : cycleType === "monthly" ? [monthDay]
       : cycleType === "yearly" ? [yearMonth, yearDay]
       : [];
@@ -642,7 +648,7 @@ function CycleEditor({
           <option value="yearly">{t("heartbeat.cycleYearly")}</option>
         </select>
 
-        {(cycleType === "weekly" || cycleType === "biweekly") && (
+        {(cycleType === "daily" || cycleType === "weekly" || cycleType === "biweekly") && (
           <div className="heartbeat-editor__weekdays">
             {WEEKDAYS.map((wd) => (
               <button
