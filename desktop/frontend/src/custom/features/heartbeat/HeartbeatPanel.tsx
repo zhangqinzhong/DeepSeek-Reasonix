@@ -706,6 +706,11 @@ function CycleEditor({
 
 // ── Editor ─────────────────────────────────────────────────────────────────────
 
+function normalizeMode(mode: string | undefined): string {
+  if (mode === "ask" || mode === "auto" || mode === "yolo") return mode;
+  return "yolo"; // default
+}
+
 function TaskEditor({
   task,
   onSave,
@@ -822,6 +827,39 @@ function TaskEditor({
           placeholder={t("heartbeat.promptPlaceholder")}
           rows={5}
         />
+      </div>
+
+      {/* Approval Mode */}
+      <div className="heartbeat-editor__field">
+        <label>权限等级</label>
+        <div className="set-seg" style={{ alignSelf: "flex-start" }}>
+          <button
+            className={`set-seg__btn${normalizeMode(draft.approvalMode) === "ask" ? " set-seg__btn--on" : ""}`}
+            onClick={() => setDraft((prev) => ({ ...prev, approvalMode: "ask" }))}
+            title="每次工具调用需要手动批准"
+          >
+            Ask
+          </button>
+          <button
+            className={`set-seg__btn${normalizeMode(draft.approvalMode) === "auto" ? " set-seg__btn--on" : ""}`}
+            onClick={() => setDraft((prev) => ({ ...prev, approvalMode: "auto" }))}
+            title="自动批准安全工具调用"
+          >
+            Auto
+          </button>
+          <button
+            className={`set-seg__btn${normalizeMode(draft.approvalMode) === "yolo" ? " set-seg__btn--on" : ""}`}
+            onClick={() => setDraft((prev) => ({ ...prev, approvalMode: "yolo" }))}
+            title="跳过所有权限提示，默认模式"
+          >
+            YOLO
+          </button>
+        </div>
+        <span className="heartbeat-editor__mode-hint">
+          {normalizeMode(draft.approvalMode) === "yolo" ? "跳过所有工具权限提示，任务自动运行" :
+           normalizeMode(draft.approvalMode) === "auto" ? "自动批准安全工具，保留拒绝规则" :
+           "每次工具调用都需要手动确认"}
+        </span>
       </div>
 
       {/* Frequency */}

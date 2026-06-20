@@ -37,6 +37,7 @@ type HeartbeatTask struct {
 	TopicID       string `json:"topicId,omitempty"`       // created topic, reused on re-run
 	LastRunAt     int64  `json:"lastRunAt,omitempty"`     // unix millis
 	CreatedAt     int64  `json:"createdAt,omitempty"`
+	ApprovalMode  string `json:"approvalMode,omitempty"` // "ask" | "auto" | "yolo"; empty defaults to "yolo"
 }
 
 // heartbeatConfig is the on-disk format.
@@ -173,6 +174,18 @@ func (e *HeartbeatEngine) tick() {
 	e.mu.Unlock()
 }
 
+// normalizeHeartbeatApprovalMode returns a valid approval mode for the task.
+// Empty or unknown values default to "yolo" so that scheduled tasks run
+// without interrupting the user for permission prompts.
+func normalizeHeartbeatApprovalMode(mode string) string {
+	switch mode {
+	case "ask", "auto", "yolo":
+		return mode
+	default:
+		return "yolo"
+	}
+}
+
 // executeTask runs one heartbeat: creates/opens topic, submits prompt.
 // Returns the updated task (topicId and LastRunAt may change).
 // On controller failure the task is returned WITHOUT updating LastRunAt,
@@ -226,6 +239,12 @@ func (e *HeartbeatEngine) executeTask(t HeartbeatTask) HeartbeatTask {
 	if !controllerReady {
 		log.Printf("[heartbeat] controller not ready for %q, skipping", t.Title)
 		return t // don't update LastRunAt — retry next tick
+	}
+
+	// Apply the task's approval mode to the controller so that permission
+	// prompts are handled as configured (default "yolo" = no blocking).
+	if ctrl := e.app.ctrlByTabID(tabMeta.ID); ctrl != nil {
+		ctrl.SetToolApprovalMode(normalizeHeartbeatApprovalMode(t.ApprovalMode))
 	}
 
 	// Submit as a plain user turn so scheduled prompts cannot invoke desktop
