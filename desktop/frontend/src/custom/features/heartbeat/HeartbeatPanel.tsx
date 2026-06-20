@@ -831,34 +831,34 @@ function TaskEditor({
 
       {/* Approval Mode */}
       <div className="heartbeat-editor__field">
-        <label>权限等级</label>
+        <label>{t("heartbeat.fieldApprovalMode")}</label>
         <div className="set-seg" style={{ alignSelf: "flex-start" }}>
           <button
             className={`set-seg__btn${normalizeMode(draft.approvalMode) === "ask" ? " set-seg__btn--on" : ""}`}
             onClick={() => setDraft((prev) => ({ ...prev, approvalMode: "ask" }))}
-            title="每次工具调用需要手动批准"
+            title={t("heartbeat.approvalModeAskTooltip")}
           >
-            Ask
+            {t("heartbeat.approvalModeAsk")}
           </button>
           <button
             className={`set-seg__btn${normalizeMode(draft.approvalMode) === "auto" ? " set-seg__btn--on" : ""}`}
             onClick={() => setDraft((prev) => ({ ...prev, approvalMode: "auto" }))}
-            title="自动批准安全工具调用"
+            title={t("heartbeat.approvalModeAutoTooltip")}
           >
-            Auto
+            {t("heartbeat.approvalModeAuto")}
           </button>
           <button
             className={`set-seg__btn${normalizeMode(draft.approvalMode) === "yolo" ? " set-seg__btn--on" : ""}`}
             onClick={() => setDraft((prev) => ({ ...prev, approvalMode: "yolo" }))}
-            title="跳过所有权限提示，默认模式"
+            title={t("heartbeat.approvalModeYoloTooltip")}
           >
-            YOLO
+            {t("heartbeat.approvalModeYolo")}
           </button>
         </div>
         <span className="heartbeat-editor__mode-hint">
-          {normalizeMode(draft.approvalMode) === "yolo" ? "跳过所有工具权限提示，任务自动运行" :
-           normalizeMode(draft.approvalMode) === "auto" ? "自动批准安全工具，保留拒绝规则" :
-           "每次工具调用都需要手动确认"}
+          {normalizeMode(draft.approvalMode) === "yolo" ? t("heartbeat.approvalModeYoloHint") :
+           normalizeMode(draft.approvalMode) === "auto" ? t("heartbeat.approvalModeAutoHint") :
+           t("heartbeat.approvalModeAskHint")}
         </span>
       </div>
 
