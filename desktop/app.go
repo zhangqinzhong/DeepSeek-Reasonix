@@ -4196,6 +4196,7 @@ func skillRootsViewFrom(cwd string, cfg, userCfg *config.Config) []SkillRootView
 		}
 	}
 	out := []SkillRootView{}
+	seenRoots := map[string]int{}
 	for _, r := range roots {
 		dir := config.CanonicalSkillPath(r.Dir)
 		view := SkillRootView{
@@ -4208,6 +4209,11 @@ func skillRootsViewFrom(cwd string, cfg, userCfg *config.Config) []SkillRootView
 			Skills:     counts[dir],
 			SkillItems: skillItems[dir],
 		}
+		if idx, ok := seenRoots[dir]; ok {
+			out[idx] = mergeDuplicateSkillRootView(out[idx], view)
+			continue
+		}
+		seenRoots[dir] = len(out)
 		out = append(out, view)
 	}
 	if userCfg != nil {
@@ -4226,6 +4232,22 @@ func skillRootsViewFrom(cwd string, cfg, userCfg *config.Config) []SkillRootView
 		}
 	}
 	return out
+}
+
+func mergeDuplicateSkillRootView(existing, duplicate SkillRootView) SkillRootView {
+	existing.Configured = existing.Configured || duplicate.Configured
+	existing.Removable = existing.Removable || duplicate.Removable
+	if existing.Status != "ok" && duplicate.Status == "ok" {
+		existing.Status = duplicate.Status
+	}
+	if existing.Skills == 0 && duplicate.Skills > 0 {
+		existing.Skills = duplicate.Skills
+		existing.SkillItems = duplicate.SkillItems
+	}
+	if existing.Warning == "" {
+		existing.Warning = duplicate.Warning
+	}
+	return existing
 }
 
 func skillRootsCacheKey(cwd string, cfg, userCfg *config.Config) string {
