@@ -46,12 +46,11 @@ import { UndoRewindBanner } from "./components/UndoRewindBanner";
 import { ClearContextCard } from "./components/ClearContextCard";
 import { StatusBar } from "./components/StatusBar";
 import { CommandPalette, type PaletteItem } from "./components/CommandPalette";
-import type { SettingsInitialFocus } from "./components/SettingsPanel";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ContextPanel } from "./components/ContextPanel";
 import { WorkspacePanel } from "./components/WorkspacePanel";
 import { Tooltip } from "./components/Tooltip";
-import { StartupSplash, shouldShowStartupSplash } from "./components/StartupSplash";
+import { StartupSplash } from "./components/StartupSplash";
 import { OnboardingOverlay } from "./components/OnboardingOverlay";
 import { AppChrome } from "./components/AppChrome";
 import { ShortcutsCheatsheet } from "./components/ShortcutsCheatsheet";
@@ -71,7 +70,6 @@ import {
   type Mode,
   type ProjectNode,
   type SessionMeta,
-  type SettingsTab,
   type SettingsView,
   type TabMeta,
   type TokenMode,
@@ -119,6 +117,7 @@ import {
   saveSidebarWidth,
   useLayoutStore,
 } from "./store/layout";
+import { useOverlayStore } from "./store/overlays";
 import { hydrateDisplayMode } from "./lib/displayMode";
 import { DEFAULT_STATUS_BAR_ITEMS, normalizeStatusBarItems, type StatusBarItemId } from "./lib/statusBarItems";
 import { sessionActivityTime } from "./lib/session";
@@ -824,26 +823,34 @@ export default function App() {
   const [tabOrderIds, setTabOrderIds] = useState<string[]>([]);
   const [tabRevealSignal, setTabRevealSignal] = useState(0);
   const [transcriptRevealSignal, setTranscriptRevealSignal] = useState(0);
-  const [startupSplashVisible, setStartupSplashVisible] = useState<boolean>(() => shouldShowStartupSplash());
+  const startupSplashVisible = useOverlayStore((s) => s.startupSplashVisible);
+  const setStartupSplashVisible = useOverlayStore((s) => s.setStartupSplashVisible);
   // null until the mount probe resolves; true shows the overlay. Probed once —
   // clearing the key mid-session is the Settings panel's job, not the gate's.
-  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
-  const [settingsTarget, setSettingsTarget] = useState<SettingsTab | null>(null);
-  const [settingsFocus, setSettingsFocus] = useState<SettingsInitialFocus | null>(null);
+  const needsOnboarding = useOverlayStore((s) => s.needsOnboarding);
+  const setNeedsOnboarding = useOverlayStore((s) => s.setNeedsOnboarding);
+  const settingsTarget = useOverlayStore((s) => s.settingsTarget);
+  const setSettingsTarget = useOverlayStore((s) => s.setSettingsTarget);
+  const settingsFocus = useOverlayStore((s) => s.settingsFocus);
+  const setSettingsFocus = useOverlayStore((s) => s.setSettingsFocus);
   const [desktopLayoutStyle, setDesktopLayoutStyle] = useState<DesktopLayoutStyle>("workbench");
   const singleSurfaceLayout = desktopLayoutStyle === "workbench" || desktopLayoutStyle === "creation";
   const [startupUpdateChecksEnabled, setStartupUpdateChecksEnabled] = useState<boolean | null>(null);
   const [histView, setHistView] = useState<HistoryViewState | null>(null);
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [paletteSessions, setPaletteSessions] = useState<SessionMeta[]>([]);
+  const paletteOpen = useOverlayStore((s) => s.paletteOpen);
+  const setPaletteOpen = useOverlayStore((s) => s.setPaletteOpen);
+  const shortcutsOpen = useOverlayStore((s) => s.shortcutsOpen);
+  const setShortcutsOpen = useOverlayStore((s) => s.setShortcutsOpen);
+  const paletteSessions = useOverlayStore((s) => s.paletteSessions);
+  const setPaletteSessions = useOverlayStore((s) => s.setPaletteSessions);
   const { showToast } = useToast();
   const [sidebarImConnections, setSidebarImConnections] = useState<SidebarImConnection[]>([]);
   const [imTopicSources, setImTopicSources] = useState<Record<string, SidebarImTopicSource>>({});
   const [sidebarImDetailConnectionId, setSidebarImDetailConnectionId] = useState("");
   const sidebarCollapsed = useLayoutStore((s) => s.sidebarCollapsed);
   const setSidebarCollapsed = useLayoutStore((s) => s.setSidebarCollapsed);
-  const [heartbeatOpen, setHeartbeatOpen] = useState(false);
+  const heartbeatOpen = useOverlayStore((s) => s.heartbeatOpen);
+  const setHeartbeatOpen = useOverlayStore((s) => s.setHeartbeatOpen);
   type TimeFilter = "all" | "10" | "20" | "1h" | "3h" | "5h" | "1d";
   const [topicTimeFilter, setTopicTimeFilter] = useState<TimeFilter>(() => {
     try {
@@ -888,15 +895,19 @@ export default function App() {
   const [projectRevision, setProjectRevision] = useState(0);
   const [activeTopicTurns, setActiveTopicTurns] = useState<number | undefined>(undefined);
   const [composerInsertRequest, setComposerInsertRequest] = useState<ComposerInsertRequest | null>(null);
-  const [transientOverlayDismissSignal, setTransientOverlayDismissSignal] = useState(0);
+  const transientOverlayDismissSignal = useOverlayStore((s) => s.transientOverlayDismissSignal);
+  const setTransientOverlayDismissSignal = useOverlayStore((s) => s.setTransientOverlayDismissSignal);
   const [desktopPlatform, setDesktopPlatform] = useState<DesktopPlatform>(detectBrowserPlatform);
   const [statusBarStyle, setStatusBarStyle] = useState<"icon" | "text">("text");
   const [statusBarItems, setStatusBarItems] = useState<StatusBarItemId[]>(() => [...DEFAULT_STATUS_BAR_ITEMS]);
   const [renamingTopicId, setRenamingTopicId] = useState<string | null>(null);
   const [topicTitleDraft, setTopicTitleDraft] = useState("");
-  const [topicExportOpen, setTopicExportOpen] = useState(false);
-  const [sidebarSearchOpen, setSidebarSearchOpen] = useState(false);
-  const [sidebarSearchFocusSignal, setSidebarSearchFocusSignal] = useState(0);
+  const topicExportOpen = useOverlayStore((s) => s.topicExportOpen);
+  const setTopicExportOpen = useOverlayStore((s) => s.setTopicExportOpen);
+  const sidebarSearchOpen = useOverlayStore((s) => s.sidebarSearchOpen);
+  const setSidebarSearchOpen = useOverlayStore((s) => s.setSidebarSearchOpen);
+  const sidebarSearchFocusSignal = useOverlayStore((s) => s.sidebarSearchFocusSignal);
+  const setSidebarSearchFocusSignal = useOverlayStore((s) => s.setSidebarSearchFocusSignal);
   const [sidebarTogglePressed, setSidebarTogglePressed] = useState(false);
   const [workspaceTogglePressed, setWorkspaceTogglePressed] = useState(false);
   const [clearContextPending, setClearContextPending] = useState(false);

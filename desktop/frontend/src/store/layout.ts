@@ -16,6 +16,8 @@ import { create } from "zustand";
 
 import { loadLayoutSize, saveLayoutSize } from "../lib/layoutPreferences";
 
+import { applySetState } from "./setState";
+
 const SIDEBAR_COLLAPSED_KEY = "reasonix.sidebar.collapsed";
 const SIDEBAR_DEFAULT_WIDTH = 264;
 export const SIDEBAR_MIN_WIDTH = 264;
@@ -113,13 +115,6 @@ export function saveRightDockPreviewWidth(width: number): void {
 // readers and don't belong in shared state.)
 export type RightDockMode = "context" | "files" | "changed";
 
-// resolve mirrors React's setState contract: a setter accepts either the next
-// value or an updater (prev => next), so the migrated call sites — including
-// functional toggles like setWorkspacePanelMaximized(v => !v) — are drop-in.
-function resolve<T>(prev: T, update: SetStateAction<T>): T {
-  return typeof update === "function" ? (update as (value: T) => T)(prev) : update;
-}
-
 export type LayoutState = {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -152,8 +147,8 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   setSidebarWidth: (width) => set({ sidebarWidth: width }),
   setRightDockTreeWidth: (width) => set({ rightDockTreeWidth: width }),
   setRightDockPreviewWidth: (width) => set({ rightDockPreviewWidth: width }),
-  setWorkspacePanelOpen: (update) => set((s) => ({ workspacePanelOpen: resolve(s.workspacePanelOpen, update) })),
-  setWorkspacePanelMaximized: (update) => set((s) => ({ workspacePanelMaximized: resolve(s.workspacePanelMaximized, update) })),
-  setWorkspacePreviewActive: (update) => set((s) => ({ workspacePreviewActive: resolve(s.workspacePreviewActive, update) })),
-  setRightDockMode: (update) => set((s) => ({ rightDockMode: resolve(s.rightDockMode, update) })),
+  setWorkspacePanelOpen: (update) => set((s) => ({ workspacePanelOpen: applySetState(s.workspacePanelOpen, update) })),
+  setWorkspacePanelMaximized: (update) => set((s) => ({ workspacePanelMaximized: applySetState(s.workspacePanelMaximized, update) })),
+  setWorkspacePreviewActive: (update) => set((s) => ({ workspacePreviewActive: applySetState(s.workspacePreviewActive, update) })),
+  setRightDockMode: (update) => set((s) => ({ rightDockMode: applySetState(s.rightDockMode, update) })),
 }));
