@@ -195,6 +195,28 @@ input,textarea{font:inherit;color:inherit}
 .goal-chip__text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .goal-chip__close{flex-shrink:0;margin-left:2px;opacity:.6;font-size:14px;line-height:1}
 .goal-chip__close:hover{opacity:1}
+/* todo panel */
+.todos{max-width:760px;margin:0 auto 8px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--panel);overflow:hidden;animation:msg-in .2s ease;display:none}
+.todos--visible{display:block}
+.todos__head{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;user-select:none;font-size:13px;color:var(--fg-2);transition:background .15s ease}
+.todos__head:hover{background:var(--card-hover)}
+.todos__title{font-weight:600;color:var(--fg);font-size:12.5px}
+.todos__badge{font-family:var(--mono);font-size:11px;color:var(--accent);background:var(--accent-soft);padding:1px 7px;border-radius:99px}
+.todos__summary{flex:1;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.todos__chev{color:var(--muted-2);transition:transform .15s;display:inline-flex}
+.todos--collapsed .todos__chev{transform:rotate(-90deg)}
+.todos--collapsed .todos__list{display:none}
+.todos__list{list-style:none;margin:0;padding:0 12px 8px;display:grid;gap:5px;max-height:220px;overflow-y:auto;border-top:1px solid var(--border);padding-top:8px}
+.todos__item{display:grid;grid-template-columns:auto 1fr;align-items:flex-start;gap:8px;font-size:12.5px;line-height:1.5;padding:3px 0}
+.todos__item--sub{padding-left:16px}
+.todos__status{display:inline-flex;align-items:center;justify-content:center;padding:1px 7px;border:1px solid var(--border);border-radius:99px;background:var(--bg-2);color:var(--muted);font-size:10.5px;line-height:1.35;white-space:nowrap;min-width:0}
+.todos__status--completed{border-color:var(--success-soft);color:var(--success);background:var(--success-soft)}
+.todos__status--in_progress{border-color:var(--accent-soft);color:var(--accent);background:var(--accent-soft)}
+.todos__text{min-width:0;color:var(--fg-2)}
+.todos__item--completed .todos__text{color:var(--muted-2);text-decoration:line-through}
+.todos__item--in_progress .todos__text{color:var(--fg);font-weight:500}
+.todos__dismiss{flex-shrink:0;padding:2px 6px;color:var(--muted-2);font-size:14px;line-height:1;cursor:pointer;border-radius:4px}
+.todos__dismiss:hover{color:var(--danger);background:var(--danger-soft)}
 .composer__btn svg{width:17px;height:17px}
 
 /* toolbar */
@@ -359,6 +381,16 @@ input,textarea{font:inherit;color:inherit}
         <span class="goal-chip__text" id="goal-chip-text"></span>
         <span class="goal-chip__close">&times;</span>
       </span>
+    </div>
+    <div id="todo-panel" class="todos">
+      <div class="todos__head" id="todos-head">
+        <span class="todos__title" id="todos-title">To-dos</span>
+        <span class="todos__badge" id="todos-badge"></span>
+        <span class="todos__summary" id="todos-summary"></span>
+        <span class="todos__dismiss" id="todos-dismiss" title="Close" style="display:none">&times;</span>
+        <span class="todos__chev"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></span>
+      </div>
+      <ul class="todos__list" id="todos-list"></ul>
     </div>
     <div class="toolbar">
       <button class="toolbar__btn toolbar__btn--ok" id="btn-auto" title="__('auto_mode')">
@@ -1015,17 +1047,17 @@ function acceptSlash(){if(!slashOpen)return;const c=slashFiltered[slashIndex];if
 
 // ── SSE ──
 const es=new EventSource('/events');
-es.onopen=()=>{setConnState('connected');fetchStatus();};
+es.onopen=()=>{setConnState('connected');fetchStatus();fetchTodos();};
 es.onmessage=ev=>{setConnState('connected');
   const e=JSON.parse(ev.data);
   if(e.kind!=='retrying')clearRetrying();
   switch(e.kind){
-    case 'turn_started': setRunning(true); finalizeMsg(); toolCards={}; break;
+    case 'turn_started': setRunning(true); finalizeMsg(); toolCards={}; todosDismissed=false; break;
     case 'reasoning': appendReasoning(e.reasoning||e.text||''); break;
     case 'text': currentReasoning=null; appendText(e.text||''); break;
     case 'message': finalizeMsg(); break;
     case 'tool_dispatch': if(e.tool)renderToolDispatch(e.tool); break;
-    case 'tool_result': if(e.tool)renderToolResult(e.tool); break;
+    case 'tool_result': if(e.tool){renderToolResult(e.tool);if(e.tool.name==='todo_write'&&!e.tool.parentId&&!e.tool.err){try{const ts=parseTodos(e.tool.args);if(ts.length){todosState=ts;renderTodoPanel();}}catch{}}} break;
     case 'tool_progress': if(e.tool)renderToolProgress(e.tool); break;
     case 'usage':
       if(e.usage){turnTokens=e.usage.completionTokens||0;
@@ -1049,7 +1081,7 @@ es.onmessage=ev=>{setConnState('connected');
     case 'compaction_started': showCompaction({trigger:e.compaction?.trigger}); break;
     case 'compaction_done': showCompaction(e.compaction||{}); break;
     case 'retrying': setRetrying(e.retryAttempt,e.retryMax); break;
-    case 'turn_done': finalizeMsg(); setRunning(false); if(e.err){log.appendChild(el('div','msg--error','✗ '+e.err));scrollDown();} fetchStatus(); break;
+    case 'turn_done': finalizeMsg(); setRunning(false); if(e.err){log.appendChild(el('div','msg--error','✗ '+e.err));scrollDown();} fetchStatus(); fetchTodos(); break;
   }
 };
 es.onerror=()=>{
@@ -1116,7 +1148,7 @@ function renderHistoryMessages(ms){
   });
   currentMsg=null;currentText=null;currentReasoning=null; scrollDown();
 }
-fetch('/history').then(r=>r.json()).then(renderHistoryMessages).catch(()=>{});
+fetch('/history').then(r=>r.json()).then(msgs=>{renderHistoryMessages(msgs);fetchTodos();}).catch(()=>{});
 
 // ── session list ──
 let sessionCount=0;
@@ -1133,7 +1165,7 @@ function loadSessions(){
       const title=s.title||name.replace(/^\w+-/,'').replace(/T/,' ').replace(/[-_]/g,' ').slice(0,30);
       const meta=s.turns?s.turns+' turns':'';
 	      item.innerHTML='<svg class="session-item__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><div class="session-item__body"><div class="session-item__title">'+escHtml(title)+'</div><div class="session-item__meta">'+escHtml(meta)+'</div></div><button type="button" class="session-del" data-name="'+escAttr(s.name)+'" title="'+escAttr(__('delete_confirm'))+'">&times;</button>';
-      item.onclick=()=>{if(running||s.current)return;post('/resume',{path:s.path}).then(()=>{log.innerHTML='';log.appendChild(welcome);welcome.style.display='';loadSessions();setTimeout(()=>fetch('/history').then(r=>r.json()).then(renderHistoryMessages),300);});};
+      item.onclick=()=>{if(running||s.current)return;post('/resume',{path:s.path}).then(()=>{log.innerHTML='';log.appendChild(welcome);welcome.style.display='';todosDismissed=false;loadSessions();setTimeout(()=>fetch('/history').then(r=>r.json()).then(msgs=>{renderHistoryMessages(msgs);fetchTodos();}),300);});};
       list.appendChild(item);
     });
   }).catch(()=>{const list=$('#session-list');if(list)list.innerHTML='<div style="padding:10px;color:var(--muted-2);font-size:12px">'+__('error_loading')+'</div>';});
@@ -1232,6 +1264,52 @@ function toggleGoalMode(){
   }
 }
 
+// ── todo panel ──
+let todosState=[],todosDismissed=false;
+function parseTodos(args){
+  try{const a=JSON.parse(args);return Array.isArray(a.todos)?a.todos:[];}
+  catch{return[];}
+}
+function todoStatusLabel(s){
+  switch(String(s||'').trim()){
+    case'completed':return '✓';
+    case'in_progress':return '▶';
+    default:return '○';
+  }
+}
+function hasIncompleteTodos(ts){return ts.some(t=>String(t.status||'').trim()!=='completed');}
+function renderTodoPanel(){
+  const panel=$('#todo-panel'),list=$('#todos-list'),badge=$('#todos-badge');
+  const summary=$('#todos-summary'),dismiss=$('#todos-dismiss'),title=$('#todos-title');
+  if(!panel||todosDismissed){panel&&(panel.classList.remove('todos--visible'));return;}
+  if(!todosState.length){panel.classList.remove('todos--visible');return;}
+  const done=todosState.filter(t=>String(t.status||'').trim()==='completed').length;
+  const total=todosState.length;
+  const current=todosState.find(t=>String(t.status||'').trim()==='in_progress');
+  const allDone=done===total;
+  badge.textContent=done+'/'+total;
+  summary.textContent=(current?.activeForm||current?.content||todosState[todosState.length-1]?.content||'').slice(0,60);
+  dismiss.style.display=allDone?'':'none';
+  if(allDone)panel.classList.add('todos--collapsed');
+  list.innerHTML='';
+  todosState.forEach((t,i)=>{
+    const st=String(t.status||'').trim();
+    const li=el('li','todos__item todos__item--'+st+(t.level?' todos__item--sub':''));
+    li.innerHTML='<span class="todos__status todos__status--'+st+'">'+todoStatusLabel(st)+'</span><span class="todos__text">'+escHtml((st==='in_progress'&&t.activeForm)?t.activeForm:t.content)+'</span>';
+    list.appendChild(li);
+  });
+  panel.classList.add('todos--visible');
+}
+function fetchTodos(){
+  fetch('/todos').then(r=>r.json()).then(ts=>{
+    if(Array.isArray(ts)){todosState=ts;renderTodoPanel();}
+  }).catch(()=>{});
+}
+$('#todos-head').onclick=function(e){
+  if(e.target.closest('.todos__dismiss')){todosDismissed=true;renderTodoPanel();return;}
+  const panel=$('#todo-panel');panel.classList.toggle('todos--collapsed');
+};
+
 // toolbar buttons
 btnSend.onclick=()=>void send();
 btnStop.onclick=()=>post('/cancel');
@@ -1240,7 +1318,7 @@ $('#btn-plan').onclick=()=>void setPlan(!planMode);
 $('#btn-bypass').onclick=()=>void toggleYolo();
 $('#btn-goal').onclick=()=>toggleGoalMode();
 $('#goal-chip').onclick=()=>toggleGoalMode();
-$('#btn-new').onclick=()=>{if(running)return;post('/new').then(()=>{log.innerHTML='';log.appendChild(welcome);welcome.style.display='';loadSessions();});};
+$('#btn-new').onclick=()=>{if(running)return;post('/new').then(()=>{log.innerHTML='';log.appendChild(welcome);welcome.style.display='';todosState=[];todosDismissed=false;renderTodoPanel();loadSessions();});};
 $('#btn-compact').onclick=()=>{if(!running)post('/compact');};
 $('#btn-rewind').onclick=()=>openRewindPicker();
 $('#btn-tree').onclick=()=>{post('/submit',{input:'/tree'});};
