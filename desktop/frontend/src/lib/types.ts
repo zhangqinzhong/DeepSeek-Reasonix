@@ -705,20 +705,6 @@ export interface JobView {
   startedAt: number; // unix milliseconds
 }
 
-// HydrateTopicData bundles everything the frontend needs for a topic switch,
-// returned by app.HydrateTopic as a single IPC response.
-export interface HydrateTopicData {
-  tabMeta: TabMeta;
-  metas: TabMeta[];
-  meta: Meta;
-  history: HistoryMessage[];
-  checkpoints: CheckpointMeta[];
-  context: ContextInfo;
-  balance: BalanceInfo;
-  effort: EffortInfo;
-  jobs: JobView[];
-}
-
 export interface PermissionsView {
   mode: string; // "ask" | "allow" | "deny"
   allow: string[];

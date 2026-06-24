@@ -33,7 +33,6 @@ import type {
   HistoryMessage,
   HookConfigView,
   HooksSettingsView,
-  HydrateTopicData,
   JobView,
   MCPServerInput,
   MemorySuggestion,
@@ -308,7 +307,6 @@ export interface AppBindings {
   OpenTopicSession(scope: string, workspaceRoot: string, topicID: string, sessionPath: string): Promise<TabMeta>;
   EnsureBlankTab(scope: string, workspaceRoot: string): Promise<TabMeta>;
   ActivateTopic(scope: string, workspaceRoot: string, topicID: string, sessionPath: string): Promise<TabMeta>;
-  HydrateTopic(scope: string, workspaceRoot: string, topicID: string, sessionPath: string): Promise<HydrateTopicData>;
   EnsureBlankSurface(scope: string, workspaceRoot: string): Promise<TabMeta>;
   SetActiveTab(tabID: string): Promise<void>;
   ReorderTabs(tabIDs: string[]): Promise<void>;
@@ -541,7 +539,7 @@ function bridgeBreadcrumb(method: string): string {
     return `mcp ${method}`;
   if (/^(AddSkillPath|RemoveSkillPath|RefreshSkills|SetSkillEnabled|AcceptSkillSuggestion)/.test(method))
     return `skill ${method}`;
-  if (/^(OpenProjectTab|OpenGlobalTab|OpenTopicSession|EnsureBlankTab|ActivateTopic|HydrateTopic|EnsureBlankSurface|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
+  if (/^(OpenProjectTab|OpenGlobalTab|OpenTopicSession|EnsureBlankTab|ActivateTopic|EnsureBlankSurface|SetActiveTab|CloseTab|ReorderTabs|CreateTopic|RenameTopic|DeleteTopic|TrashTopic|RenameProject|RemoveWorkspace|SwitchWorkspace|PickWorkspace)/.test(method))
     return `nav ${method}`;
   return "";
 }
@@ -2831,27 +2829,6 @@ function makeMockApp(): AppBindings {
           : await this.OpenGlobalTab(topicID);
       mockTabs = mockTabs.filter((item) => item.id === tab.id).map((item) => ({ ...item, active: true }));
       return { ...mockTabs[0] };
-    },
-    async HydrateTopic(scope: string, workspaceRoot: string, topicID: string, sessionPath: string) {
-      const tab = await this.ActivateTopic(scope, workspaceRoot, topicID, sessionPath);
-      const meta = await this.MetaForTab(tab.id);
-      const history = await this.HistoryForTab(tab.id);
-      const checkpoints = await this.CheckpointsForTab(tab.id);
-      const context = await this.ContextUsageForTab(tab.id);
-      const balance = await this.BalanceForTab(tab.id);
-      const effort = await this.EffortForTab(tab.id);
-      const jobs = await this.JobsForTab(tab.id);
-      return {
-        tabMeta: tab,
-        metas: mockTabs.map((t) => ({ ...t })),
-        meta,
-        history,
-        checkpoints,
-        context,
-        balance,
-        effort,
-        jobs,
-      };
     },
     async EnsureBlankSurface(scope: string, workspaceRoot: string) {
       const tab = await this.EnsureBlankTab(scope, workspaceRoot);

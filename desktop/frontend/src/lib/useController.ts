@@ -1522,29 +1522,29 @@ export function useController() {
   }, [confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   const activateTopic = useCallback(async (scope: string, workspaceRoot: string, topicId: string, sessionPath = ""): Promise<TabMeta> => {
-    // Single IPC: activates the topic and returns all tab data at once,
-    // replacing 9 separate IPC round-trips.
-    const data = await app.HydrateTopic(scope, workspaceRoot, topicId, sessionPath);
-    const meta = data.tabMeta;
+    const meta = await app.ActivateTopic(scope, workspaceRoot, topicId, sessionPath);
+    // Save previous tab's items so the new tab can use them as a placeholder
+    // during loading, avoiding a blank/Welcome flash before history arrives.
+    const prevItems = activeTabIdRef.current ? statesRef.current.get(activeTabIdRef.current)?.items : undefined;
     for (const id of Array.from(statesRef.current.keys())) {
       if (id !== meta.id) statesRef.current.delete(id);
     }
     setActiveTabId(meta.id);
     activeTabIdRef.current = meta.id;
     confirmBackendActiveTab(meta.id);
-    // Batch dispatch all data — React 18 merges synchronous state updates
-    // within the same microtask into a single re-render.
-    dispatchTo(meta.id, { type: "hydrate_start", reason: "open-topic" });
-    dispatchTo(meta.id, { type: "meta", meta: data.meta });
-    if (data.history?.length) dispatchTo(meta.id, { type: "history", messages: data.history });
-    dispatchTo(meta.id, { type: "checkpoints", checkpoints: data.checkpoints ?? [] });
-    dispatchTo(meta.id, { type: "context", context: data.context });
-    dispatchTo(meta.id, { type: "balance", balance: data.balance });
-    dispatchTo(meta.id, { type: "effort", effort: data.effort });
-    dispatchTo(meta.id, { type: "jobs", jobs: data.jobs ?? [] });
-    dispatchTo(meta.id, { type: "hydrate_done" });
+    dispatchTo(meta.id, { type: "optimistic_meta", meta: metaFromTab(meta, statesRef.current.get(meta.id)?.meta) });
+    // Transfer previous items as placeholder so reset (called sync inside
+    // loadSessionDataForTab) preserves them instead of clearing to [].
+    if (prevItems?.length) {
+      const s = statesRef.current.get(meta.id);
+      if (s && !s.items.length) {
+        statesRef.current.set(meta.id, { ...s, items: prevItems });
+        bump();
+      }
+    }
+    void loadSessionDataForTab(meta.id, true, "open-topic");
     return meta;
-  }, [confirmBackendActiveTab, dispatchTo]);
+  }, [bump, confirmBackendActiveTab, dispatchTo, loadSessionDataForTab]);
 
   // Ensure a blank tab exists for the given scope — reuses an existing one
   // or creates a new tab, then loads its session data.

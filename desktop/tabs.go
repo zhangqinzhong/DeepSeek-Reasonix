@@ -1133,42 +1133,6 @@ func (a *App) ActivateTopic(scope, workspaceRoot, topicID, sessionPath string) (
 	return a.keepOnlyVisibleTab(meta.ID)
 }
 
-// HydrateTopicData bundles everything needed for a topic switch into a single
-// IPC call, replacing 9 separate IPC round-trips (ActivateTopic + MetaForTab +
-// HistoryForTab + CheckpointsForTab + ContextUsageForTab + BalanceForTab +
-// EffortForTab + JobsForTab + ListTabs).
-type HydrateTopicData struct {
-	TabMeta     TabMeta           `json:"tabMeta"`
-	Metas       []TabMeta         `json:"metas"`
-	Meta        Meta              `json:"meta"`
-	History     []HistoryMessage  `json:"history"`
-	Checkpoints []CheckpointMeta  `json:"checkpoints"`
-	Context     ContextInfo      `json:"context"`
-	Balance     BalanceInfo      `json:"balance"`
-	Effort      EffortInfo       `json:"effort"`
-	Jobs        []JobView        `json:"jobs"`
-}
-
-// HydrateTopic activates a topic and returns all tab data in one round-trip.
-func (a *App) HydrateTopic(scope, workspaceRoot, topicID, sessionPath string) (HydrateTopicData, error) {
-	meta, err := a.ActivateTopic(scope, workspaceRoot, topicID, sessionPath)
-	if err != nil {
-		return HydrateTopicData{}, err
-	}
-	id := meta.ID
-	return HydrateTopicData{
-		TabMeta:     meta,
-		Metas:       a.ListTabs(),
-		Meta:        a.MetaForTab(id),
-		History:     a.HistoryForTab(id),
-		Checkpoints: a.CheckpointsForTab(id),
-		Context:     a.ContextUsageForTab(id),
-		Balance:     a.BalanceForTab(id),
-		Effort:      a.EffortForTab(id),
-		Jobs:        a.JobsForTab(id),
-	}, nil
-}
-
 // EnsureBlankSurface mirrors EnsureBlankTab for no-tab-strip layouts: after
 // creating or reusing a blank session, it removes other visible tabs while
 // preserving running runtimes as detached background sessions.
