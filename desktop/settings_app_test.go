@@ -770,6 +770,29 @@ func TestSetDesktopMetricsDefaultsOnAndPersistsOff(t *testing.T) {
 	}
 }
 
+func TestSetMemoryCompilerDefaultsOnAndPersistsOff(t *testing.T) {
+	isolateDesktopUserDirs(t)
+
+	app := NewApp()
+	if !app.Settings().MemoryCompiler {
+		t.Fatal("Settings().MemoryCompiler default = false, want true")
+	}
+	if err := app.SetMemoryCompilerEnabled(false); err != nil {
+		t.Fatalf("SetMemoryCompilerEnabled: %v", err)
+	}
+	view := app.Settings()
+	if view.MemoryCompiler {
+		t.Fatal("Settings().MemoryCompiler = true, want false")
+	}
+	cfg := config.LoadForEdit(config.UserConfigPath())
+	if cfg.Agent.MemoryCompiler.Enabled == nil || *cfg.Agent.MemoryCompiler.Enabled {
+		t.Fatalf("agent.memory_compiler.enabled = %+v, want false", cfg.Agent.MemoryCompiler.Enabled)
+	}
+	if cfg.MemoryCompilerEnabled() {
+		t.Fatal("MemoryCompilerEnabled() = true, want false")
+	}
+}
+
 func TestSaveHooksSettingsPreservesUnknownSettingsKeys(t *testing.T) {
 	isolateDesktopUserDirs(t)
 	path := hook.GlobalSettingsPath("")

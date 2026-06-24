@@ -905,6 +905,8 @@ export const en = {
   "settings.autoPlan": "Automatic plan mode",
   "settings.autoPlan.off": "Off",
   "settings.autoPlan.on": "On",
+  "settings.memoryCompiler": "Memory v5",
+  "settings.memoryCompilerHint": "Use the execution memory compiler to generate and improve action plans from past outcomes.",
   "settings.agentRuntime": "Agent runtime",
   "settings.agentRuntimeHint": "Step limits use global settings only; ./reasonix.toml does not override them. 0 means unlimited.",
   "settings.executorMaxSteps": "Executor step limit",

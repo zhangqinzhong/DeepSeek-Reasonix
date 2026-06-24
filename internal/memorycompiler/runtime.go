@@ -1,0 +1,1120 @@
+// Package memorycompiler implements the Memory v5 execution compiler runtime.
+// It is deliberately local and rule-driven: execution traces can update
+// strategy scores and compiler mutations, but the model never rewrites code.
+package memorycompiler
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"reasonix/internal/fileutil"
+	"reasonix/internal/provider"
+)
+
+const (
+	stateFile  = "state.json"
+	tracesFile = "traces.jsonl"
+	version    = "v5.0"
+)
+
+// Runtime owns one project's Memory v5 state.
+type Runtime struct {
+	dir string
+	mu  sync.Mutex
+}
+
+// New returns a runtime backed by dir. A blank dir disables persistence and
+// returns nil so callers can keep the fast path simple.
+func New(dir string) *Runtime {
+	if strings.TrimSpace(dir) == "" {
+		return nil
+	}
+	return &Runtime{dir: dir}
+}
+
+// PlannerIR is the memory-compiled execution plan language injected at the turn
+// tail when there is useful learned state.
+type PlannerIR struct {
+	Version             string        `json:"version"`
+	Goal                string        `json:"goal"`
+	Constraints         []Constraint  `json:"constraints,omitempty"`
+	AvailableStrategies []StrategyRef `json:"available_strategies,omitempty"`
+	MemoryReferences    []MemoryRef   `json:"memory_references,omitempty"`
+	ExecutionSteps      []Step        `json:"execution_steps,omitempty"`
+	RiskNotes           []string      `json:"risk_notes,omitempty"`
+}
+
+type Constraint struct {
+	Type   string `json:"type"`
+	Text   string `json:"text"`
+	Source string `json:"source,omitempty"`
+}
+
+type StrategyRef struct {
+	ID          string  `json:"id"`
+	SuccessRate float64 `json:"success_rate"`
+	Samples     int     `json:"samples"`
+}
+
+type MemoryRef struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
+	Quality string `json:"quality,omitempty"`
+}
+
+type Step struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+}
+
+type ToolRecord struct {
+	ID         string `json:"id,omitempty"`
+	Name       string `json:"name"`
+	Args       string `json:"args,omitempty"`
+	Output     string `json:"output,omitempty"`
+	Error      string `json:"error,omitempty"`
+	ReadOnly   bool   `json:"read_only"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
+}
+
+type ExecutionTrace struct {
+	ID                  string       `json:"id"`
+	IRVersion           string       `json:"ir_version"`
+	Goal                string       `json:"goal"`
+	Steps               []Step       `json:"steps,omitempty"`
+	Outcome             string       `json:"outcome"`
+	EfficiencyScore     float64      `json:"efficiency_score"`
+	MemoryEffectiveness float64      `json:"memory_effectiveness"`
+	StrategyUsed        []string     `json:"strategy_used,omitempty"`
+	FailureReason       string       `json:"failure_reason,omitempty"`
+	ToolResults         []ToolRecord `json:"tool_results,omitempty"`
+	StartedAt           time.Time    `json:"started_at"`
+	CompletedAt         time.Time    `json:"completed_at"`
+}
+
+type CompilerMutation struct {
+	Target           string   `json:"target"`
+	Change           string   `json:"change"`
+	Reason           string   `json:"reason"`
+	EvidenceTraceIDs []string `json:"evidence_trace_ids,omitempty"`
+	Applied          bool     `json:"applied"`
+}
+
+type MemoryQuality string
+
+const (
+	QualityHighSignal   MemoryQuality = "HIGH_SIGNAL"
+	QualityMediumSignal MemoryQuality = "MEDIUM_SIGNAL"
+	QualityNoise        MemoryQuality = "NOISE"
+	QualityCorrupted    MemoryQuality = "CORRUPTED"
+)
+
+type MemoryNode struct {
+	ID          string        `json:"id"`
+	Type        string        `json:"type"`
+	Content     string        `json:"content"`
+	Timestamp   time.Time     `json:"timestamp"`
+	Confidence  float64       `json:"confidence"`
+	Quality     MemoryQuality `json:"quality"`
+	Constraint  *Constraint   `json:"constraint,omitempty"`
+	TruthLocked bool          `json:"truth_locked,omitempty"`
+}
+
+type MemoryEdge struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Relation string `json:"relation"`
+}
+
+type DecisionNode struct {
+	ID              string    `json:"id"`
+	Question        string    `json:"question"`
+	SelectedOption  string    `json:"selected_option"`
+	RejectedOptions []string  `json:"rejected_options,omitempty"`
+	Reasoning       string    `json:"reasoning"`
+	Timestamp       time.Time `json:"timestamp"`
+}
+
+type ExecutionState struct {
+	GoalState         string       `json:"goal_state,omitempty"`
+	CurrentPhase      string       `json:"current_phase,omitempty"`
+	KnownFacts        []string     `json:"known_facts,omitempty"`
+	ActiveConstraints []Constraint `json:"active_constraints,omitempty"`
+	FailedStrategies  []string     `json:"failed_strategies,omitempty"`
+	UpdatedAt         time.Time    `json:"updated_at,omitempty"`
+}
+
+type SystemLearning struct {
+	TraceID              string    `json:"trace_id"`
+	BadStrategies        []string  `json:"bad_strategies,omitempty"`
+	GoodPatterns         []string  `json:"good_patterns,omitempty"`
+	MemoryNoisePatterns  []string  `json:"memory_noise_patterns,omitempty"`
+	CompilerImprovements []string  `json:"compiler_improvements,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
+type Strategy struct {
+	ID            string    `json:"id"`
+	Preconditions []string  `json:"preconditions,omitempty"`
+	ExecutionPlan []Step    `json:"execution_plan,omitempty"`
+	Successes     int       `json:"successes"`
+	Failures      int       `json:"failures"`
+	LastUsedAt    time.Time `json:"last_used_at,omitempty"`
+	Description   string    `json:"description,omitempty"`
+}
+
+func (s Strategy) Samples() int { return s.Successes + s.Failures }
+
+func (s Strategy) SuccessRate() float64 {
+	if s.Samples() == 0 {
+		return 0
+	}
+	return float64(s.Successes) / float64(s.Samples())
+}
+
+type state struct {
+	Nodes          []MemoryNode       `json:"nodes,omitempty"`
+	Edges          []MemoryEdge       `json:"edges,omitempty"`
+	Decisions      []DecisionNode     `json:"decisions,omitempty"`
+	ExecutionState ExecutionState     `json:"execution_state,omitempty"`
+	Strategies     []Strategy         `json:"strategies,omitempty"`
+	Mutations      []CompilerMutation `json:"mutations,omitempty"`
+	Learnings      []SystemLearning   `json:"learnings,omitempty"`
+	NoisyRefs      map[string]int     `json:"noisy_refs,omitempty"`
+	UpdatedAt      time.Time          `json:"updated_at,omitempty"`
+}
+
+// Turn records one top-level agent turn.
+type Turn struct {
+	rt       *Runtime
+	trace    ExecutionTrace
+	strategy string
+}
+
+// StartTurn builds a Planner IR from prior learned state. It returns an empty
+// context until the runtime has enough signal to influence the next turn.
+func (r *Runtime) StartTurn(ctx context.Context, input string, _ []provider.Message) (string, *Turn) {
+	if r == nil {
+		return "", nil
+	}
+	goal := summarizeGoal(input)
+	st := r.loadState()
+	ir := buildIR(goal, st)
+	t := &Turn{
+		rt: r,
+		trace: ExecutionTrace{
+			ID:        traceID(time.Now()),
+			IRVersion: version,
+			Goal:      goal,
+			Steps:     ir.ExecutionSteps,
+			StartedAt: time.Now().UTC(),
+		},
+	}
+	if len(ir.AvailableStrategies) > 0 {
+		t.strategy = ir.AvailableStrategies[0].ID
+		t.trace.StrategyUsed = []string{t.strategy}
+	}
+	if !hasUsefulIR(ir) {
+		return "", t
+	}
+	body, err := json.MarshalIndent(ir, "", "  ")
+	if err != nil {
+		return "", t
+	}
+	if err := ctx.Err(); err != nil {
+		return "", t
+	}
+	return "<memory-compiler-ir>\n" + string(body) + "\n</memory-compiler-ir>", t
+}
+
+func buildIR(goal string, st state) PlannerIR {
+	ir := PlannerIR{Version: version, Goal: goal}
+	st.Strategies = ensureBuiltInStrategies(st.Strategies)
+	for _, c := range st.ExecutionState.ActiveConstraints {
+		ir.Constraints = appendConstraint(ir.Constraints, c)
+	}
+	for _, failed := range st.ExecutionState.FailedStrategies {
+		if strings.TrimSpace(failed) != "" {
+			ir.RiskNotes = append(ir.RiskNotes, "avoid previously failed strategy "+failed)
+		}
+	}
+	for ref, count := range st.NoisyRefs {
+		if count >= 2 {
+			ir.RiskNotes = append(ir.RiskNotes, "quarantined noisy memory pattern "+ref)
+		}
+	}
+	for _, node := range usableSubgraphNodes(st.Nodes, st.Edges, time.Now().UTC()) {
+		if node.Constraint != nil {
+			ir.Constraints = appendConstraint(ir.Constraints, *node.Constraint)
+		}
+		if node.Quality == QualityHighSignal || node.Type == "tool_result" {
+			ir.MemoryReferences = append(ir.MemoryReferences, MemoryRef{
+				ID:      node.ID,
+				Content: node.Content,
+				Quality: string(node.Quality),
+			})
+			if len(ir.MemoryReferences) >= 5 {
+				break
+			}
+		}
+	}
+	for _, m := range st.Mutations {
+		if !m.Applied {
+			continue
+		}
+		switch m.Change {
+		case "decrease_k", "decrease_weight", "quarantine_pattern":
+			ir.Constraints = appendConstraint(ir.Constraints, Constraint{Type: "avoid", Text: m.Reason, Source: m.Target})
+		case "increase_weight", "add_constraint":
+			ir.Constraints = appendConstraint(ir.Constraints, Constraint{Type: "must_use", Text: m.Reason, Source: m.Target})
+		default:
+			ir.Constraints = appendConstraint(ir.Constraints, Constraint{Type: "reference", Text: m.Reason, Source: m.Target})
+		}
+	}
+	sort.Slice(st.Strategies, func(i, j int) bool {
+		left := strategyScore(goal, st.Strategies[i])
+		right := strategyScore(goal, st.Strategies[j])
+		if left == right {
+			return st.Strategies[i].ID < st.Strategies[j].ID
+		}
+		return left > right
+	})
+	for _, s := range st.Strategies {
+		if s.Samples() == 0 {
+			continue
+		}
+		ref := StrategyRef{ID: s.ID, SuccessRate: s.SuccessRate(), Samples: s.Samples()}
+		if s.SuccessRate() < 0.34 && s.Failures >= 2 {
+			ir.RiskNotes = append(ir.RiskNotes, "avoid low-success strategy "+s.ID)
+			continue
+		}
+		ir.AvailableStrategies = append(ir.AvailableStrategies, ref)
+		if len(ir.AvailableStrategies) >= 3 {
+			break
+		}
+	}
+	if len(ir.AvailableStrategies) > 0 {
+		if plan := strategyPlan(st.Strategies, ir.AvailableStrategies[0].ID); len(plan) > 0 {
+			ir.ExecutionSteps = plan
+		}
+	}
+	if len(ir.ExecutionSteps) == 0 && (len(ir.Constraints) > 0 || len(ir.MemoryReferences) > 0 || len(ir.RiskNotes) > 0) {
+		if plan := strategyPlan(st.Strategies, bestStrategyID(goal, st.Strategies)); len(plan) > 0 {
+			ir.ExecutionSteps = plan
+		}
+	}
+	if len(ir.Constraints) > 0 || len(ir.AvailableStrategies) > 0 || len(ir.RiskNotes) > 0 {
+		if len(ir.ExecutionSteps) == 0 {
+			ir.ExecutionSteps = []Step{
+				{ID: "analyze", Action: "Inspect the current task and verify the relevant source of truth."},
+				{ID: "execute", Action: "Apply the highest-signal compatible strategy while respecting constraints."},
+				{ID: "validate", Action: "Validate the outcome with direct evidence before finalizing."},
+			}
+		}
+	}
+	return ir
+}
+
+func hasUsefulIR(ir PlannerIR) bool {
+	return len(ir.Constraints) > 0 || len(ir.MemoryReferences) > 0 || len(ir.RiskNotes) > 0
+}
+
+func appendConstraint(existing []Constraint, next Constraint) []Constraint {
+	next.Type = strings.TrimSpace(next.Type)
+	next.Text = strings.TrimSpace(next.Text)
+	if next.Type == "" || next.Text == "" {
+		return existing
+	}
+	for _, c := range existing {
+		if c.Type == next.Type && c.Text == next.Text && c.Source == next.Source {
+			return existing
+		}
+	}
+	return append(existing, next)
+}
+
+func usableNodes(nodes []MemoryNode, now time.Time) []MemoryNode {
+	out := make([]MemoryNode, 0, len(nodes))
+	for _, node := range nodes {
+		if node.Quality == QualityNoise || node.Quality == QualityCorrupted {
+			continue
+		}
+		node.Confidence = decayedConfidence(node, now)
+		if node.Confidence < 0.2 && !node.TruthLocked {
+			continue
+		}
+		out = append(out, node)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Confidence == out[j].Confidence {
+			return out[i].Timestamp.After(out[j].Timestamp)
+		}
+		return out[i].Confidence > out[j].Confidence
+	})
+	return out
+}
+
+func usableSubgraphNodes(nodes []MemoryNode, edges []MemoryEdge, now time.Time) []MemoryNode {
+	usable := usableNodes(nodes, now)
+	if len(usable) == 0 {
+		return nil
+	}
+	byID := map[string]MemoryNode{}
+	for _, node := range usable {
+		byID[node.ID] = node
+	}
+	selected := map[string]bool{}
+	frontier := make([]string, 0, 5)
+	for _, node := range usable {
+		selected[node.ID] = true
+		frontier = append(frontier, node.ID)
+		if len(frontier) >= 5 {
+			break
+		}
+	}
+	for len(frontier) > 0 && len(selected) < 12 {
+		current := frontier[0]
+		frontier = frontier[1:]
+		for _, edge := range edges {
+			if !traversableRelation(edge.Relation) {
+				continue
+			}
+			next := ""
+			switch {
+			case edge.From == current:
+				next = edge.To
+			case edge.To == current:
+				next = edge.From
+			}
+			if next == "" || selected[next] {
+				continue
+			}
+			if _, ok := byID[next]; !ok {
+				continue
+			}
+			selected[next] = true
+			frontier = append(frontier, next)
+			if len(selected) >= 12 {
+				break
+			}
+		}
+	}
+	out := make([]MemoryNode, 0, len(selected))
+	for _, node := range usable {
+		if selected[node.ID] {
+			out = append(out, node)
+		}
+	}
+	return out
+}
+
+func traversableRelation(relation string) bool {
+	switch relation {
+	case "supports", "depends_on", "derived_from", "causes":
+		return true
+	default:
+		return false
+	}
+}
+
+func decayedConfidence(node MemoryNode, now time.Time) float64 {
+	if node.TruthLocked || node.Timestamp.IsZero() {
+		return node.Confidence
+	}
+	days := now.Sub(node.Timestamp).Hours() / 24
+	if days <= 0 {
+		return node.Confidence
+	}
+	factor := 1.0
+	for days >= 7 {
+		factor *= 0.95
+		days -= 7
+	}
+	return node.Confidence * factor
+}
+
+func strategyPlan(strategies []Strategy, id string) []Step {
+	for _, s := range strategies {
+		if s.ID == id {
+			return append([]Step(nil), s.ExecutionPlan...)
+		}
+	}
+	return nil
+}
+
+func bestStrategyID(goal string, strategies []Strategy) string {
+	bestID := "general"
+	bestScore := -1.0
+	for _, s := range strategies {
+		score := strategyScore(goal, s)
+		if score > bestScore {
+			bestScore = score
+			bestID = s.ID
+		}
+	}
+	return bestID
+}
+
+func strategyScore(goal string, s Strategy) float64 {
+	score := s.SuccessRate()
+	if s.Samples() == 0 {
+		score = 0.5
+	}
+	lowerGoal := strings.ToLower(goal)
+	for _, p := range s.Preconditions {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p != "" && strings.Contains(lowerGoal, p) {
+			score += 0.75
+		}
+	}
+	if s.ID == classifyStrategy(goal) {
+		score += 0.5
+	}
+	if s.Failures >= 2 && s.SuccessRate() < 0.34 {
+		score -= 1.0
+	}
+	return score
+}
+
+func (t *Turn) RecordToolResults(records []ToolRecord) {
+	if t == nil || len(records) == 0 {
+		return
+	}
+	t.trace.ToolResults = append(t.trace.ToolResults, records...)
+}
+
+func (t *Turn) Finish(err error) {
+	if t == nil || t.rt == nil {
+		return
+	}
+	t.trace.CompletedAt = time.Now().UTC()
+	t.trace.Outcome = outcomeFor(t.trace.ToolResults, err)
+	if err != nil {
+		t.trace.FailureReason = firstLine(err.Error())
+	}
+	t.trace.EfficiencyScore = efficiencyScore(t.trace.ToolResults, t.trace.StartedAt, t.trace.CompletedAt)
+	t.trace.MemoryEffectiveness = memoryEffectiveness(t.trace)
+	t.rt.writeTraceAndLearn(t.trace, t.strategy)
+}
+
+func outcomeFor(records []ToolRecord, err error) string {
+	if err != nil {
+		return "failure"
+	}
+	if len(records) == 0 {
+		return "partial_success"
+	}
+	for _, r := range records {
+		if strings.TrimSpace(r.Error) != "" {
+			return "partial_success"
+		}
+	}
+	return "success"
+}
+
+func efficiencyScore(records []ToolRecord, start, end time.Time) float64 {
+	if len(records) == 0 {
+		return 0.5
+	}
+	seconds := end.Sub(start).Seconds()
+	if seconds <= 0 {
+		return 1
+	}
+	score := 1 / (1 + seconds/120)
+	if score < 0 {
+		return 0
+	}
+	return score
+}
+
+func memoryEffectiveness(tr ExecutionTrace) float64 {
+	if len(tr.StrategyUsed) == 0 && len(tr.Steps) == 0 {
+		return 0
+	}
+	switch tr.Outcome {
+	case "success":
+		return 1
+	case "partial_success":
+		return 0.5
+	default:
+		return 0
+	}
+}
+
+func (r *Runtime) writeTraceAndLearn(tr ExecutionTrace, strategyID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := os.MkdirAll(r.dir, 0o755); err != nil {
+		return
+	}
+	_ = appendJSONL(filepath.Join(r.dir, tracesFile), tr)
+	st := r.loadStateLocked()
+	st.Strategies = ensureBuiltInStrategies(st.Strategies)
+	if strategyID == "" {
+		strategyID = classifyStrategy(tr.Goal)
+	}
+	st.Strategies = updateStrategy(st.Strategies, strategyID, tr.Outcome)
+	learning := analyzeTrace(tr, strategyID)
+	if hasLearning(learning) {
+		st.Learnings = appendLearning(st.Learnings, learning)
+	}
+	st.Nodes, st.Edges, st.Decisions = updateGraph(st.Nodes, st.Edges, st.Decisions, tr, learning)
+	st.ExecutionState = updateExecutionState(st.ExecutionState, tr, learning)
+	st.NoisyRefs = updateNoisyRefs(st.NoisyRefs, learning)
+	st.Mutations = mergeMutations(st.Mutations, mutationsFromLearning(learning)...)
+	st.UpdatedAt = time.Now().UTC()
+	_ = writeJSON(filepath.Join(r.dir, stateFile), st)
+}
+
+func analyzeTrace(tr ExecutionTrace, strategyID string) SystemLearning {
+	learning := SystemLearning{TraceID: tr.ID, CreatedAt: time.Now().UTC()}
+	errorCounts := map[string]int{}
+	for _, rec := range tr.ToolResults {
+		if rec.Error != "" {
+			errorCounts[rec.Name+"\x00"+rec.Error]++
+		}
+	}
+	for sig, n := range errorCounts {
+		if n < 2 {
+			continue
+		}
+		parts := strings.SplitN(sig, "\x00", 2)
+		toolName := parts[0]
+		learning.BadStrategies = append(learning.BadStrategies, strategyID)
+		learning.MemoryNoisePatterns = append(learning.MemoryNoisePatterns, fmt.Sprintf("%s repeated error: %s", toolName, firstLine(parts[1])))
+		learning.CompilerImprovements = append(learning.CompilerImprovements, fmt.Sprintf("avoid repeating %s after repeated error: %s", toolName, firstLine(parts[1])))
+	}
+	if tr.Outcome == "failure" {
+		learning.BadStrategies = append(learning.BadStrategies, strategyID)
+		learning.CompilerImprovements = append(learning.CompilerImprovements, "previous execution failed; require source-of-truth verification before acting")
+	}
+	if tr.Outcome == "success" {
+		learning.GoodPatterns = append(learning.GoodPatterns, strategyID)
+	}
+	return dedupeLearning(learning)
+}
+
+func mutationsFromLearning(learning SystemLearning) []CompilerMutation {
+	var out []CompilerMutation
+	for _, reason := range learning.CompilerImprovements {
+		target := "strategy_selector"
+		change := "add_constraint"
+		if strings.Contains(reason, "source-of-truth") {
+			target = "ir_builder"
+		}
+		out = append(out, CompilerMutation{
+			Target:           target,
+			Change:           change,
+			Reason:           reason,
+			EvidenceTraceIDs: []string{learning.TraceID},
+			Applied:          true,
+		})
+	}
+	for _, pattern := range learning.MemoryNoisePatterns {
+		out = append(out, CompilerMutation{
+			Target:           "noise_filter",
+			Change:           "quarantine_pattern",
+			Reason:           pattern,
+			EvidenceTraceIDs: []string{learning.TraceID},
+			Applied:          true,
+		})
+	}
+	return out
+}
+
+func mergeMutations(existing []CompilerMutation, next ...CompilerMutation) []CompilerMutation {
+	seen := map[string]bool{}
+	out := existing[:0]
+	for _, m := range existing {
+		key := m.Target + "\x00" + m.Change + "\x00" + m.Reason
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	for _, m := range next {
+		key := m.Target + "\x00" + m.Change + "\x00" + m.Reason
+		if seen[key] || !validMutation(m) {
+			continue
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	if len(out) > 50 {
+		out = out[len(out)-50:]
+	}
+	return out
+}
+
+func hasLearning(l SystemLearning) bool {
+	return len(l.BadStrategies) > 0 || len(l.GoodPatterns) > 0 || len(l.MemoryNoisePatterns) > 0 || len(l.CompilerImprovements) > 0
+}
+
+func appendLearning(existing []SystemLearning, learning SystemLearning) []SystemLearning {
+	for _, l := range existing {
+		if l.TraceID == learning.TraceID {
+			return existing
+		}
+	}
+	existing = append(existing, learning)
+	if len(existing) > 100 {
+		existing = existing[len(existing)-100:]
+	}
+	return existing
+}
+
+func updateNoisyRefs(existing map[string]int, learning SystemLearning) map[string]int {
+	if existing == nil {
+		existing = map[string]int{}
+	}
+	for _, pattern := range learning.MemoryNoisePatterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" {
+			continue
+		}
+		existing[pattern]++
+	}
+	return existing
+}
+
+func dedupeLearning(l SystemLearning) SystemLearning {
+	l.BadStrategies = dedupeStrings(l.BadStrategies)
+	l.GoodPatterns = dedupeStrings(l.GoodPatterns)
+	l.MemoryNoisePatterns = dedupeStrings(l.MemoryNoisePatterns)
+	l.CompilerImprovements = dedupeStrings(l.CompilerImprovements)
+	return l
+}
+
+func dedupeStrings(in []string) []string {
+	seen := map[string]bool{}
+	out := in[:0]
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+func updateGraph(nodes []MemoryNode, edges []MemoryEdge, decisions []DecisionNode, tr ExecutionTrace, learning SystemLearning) ([]MemoryNode, []MemoryEdge, []DecisionNode) {
+	now := time.Now().UTC()
+	traceNode := MemoryNode{
+		ID:          "trace:" + tr.ID,
+		Type:        "state",
+		Content:     fmt.Sprintf("goal=%s outcome=%s", tr.Goal, tr.Outcome),
+		Timestamp:   now,
+		Confidence:  confidenceForOutcome(tr.Outcome),
+		Quality:     qualityForOutcome(tr.Outcome),
+		TruthLocked: false,
+	}
+	nodes = upsertNode(nodes, traceNode)
+	decision := DecisionNode{
+		ID:             "decision:" + tr.ID,
+		Question:       "Which execution strategy should guide this turn?",
+		SelectedOption: firstNonEmpty(tr.StrategyUsed, classifyStrategy(tr.Goal)),
+		Reasoning:      "Selected by Memory v5 strategy registry from goal classification and prior outcomes.",
+		Timestamp:      now,
+	}
+	decisions = appendDecision(decisions, decision)
+	nodes = upsertNode(nodes, MemoryNode{
+		ID:          decision.ID,
+		Type:        "decision",
+		Content:     decision.SelectedOption + ": " + decision.Reasoning,
+		Timestamp:   now,
+		Confidence:  confidenceForOutcome(tr.Outcome),
+		Quality:     QualityMediumSignal,
+		TruthLocked: false,
+	})
+	edges = appendEdge(edges, MemoryEdge{From: decision.ID, To: traceNode.ID, Relation: "derived_from"})
+	for i, rec := range tr.ToolResults {
+		id := fmt.Sprintf("tool:%s:%d", tr.ID, i)
+		quality := QualityHighSignal
+		constraint := (*Constraint)(nil)
+		conf := 0.95
+		content := rec.Name + " succeeded"
+		if rec.Error != "" {
+			quality = QualityMediumSignal
+			conf = 0.85
+			content = rec.Name + " failed: " + firstLine(rec.Error)
+			constraint = &Constraint{Type: "avoid", Text: "Do not repeat " + rec.Name + " with the same failing condition: " + firstLine(rec.Error), Source: id}
+		}
+		nodes = upsertNode(nodes, MemoryNode{
+			ID:          id,
+			Type:        "tool_result",
+			Content:     content,
+			Timestamp:   now,
+			Confidence:  conf,
+			Quality:     quality,
+			Constraint:  constraint,
+			TruthLocked: true,
+		})
+		edges = appendEdge(edges, MemoryEdge{From: id, To: traceNode.ID, Relation: "derived_from"})
+	}
+	for i, reason := range learning.CompilerImprovements {
+		id := fmt.Sprintf("learning:%s:%d", tr.ID, i)
+		nodes = upsertNode(nodes, MemoryNode{
+			ID:          id,
+			Type:        "fact",
+			Content:     reason,
+			Timestamp:   now,
+			Confidence:  0.75,
+			Quality:     QualityHighSignal,
+			Constraint:  &Constraint{Type: "reference", Text: reason, Source: id},
+			TruthLocked: false,
+		})
+		edges = appendEdge(edges, MemoryEdge{From: id, To: traceNode.ID, Relation: "supports"})
+	}
+	for i, pattern := range learning.MemoryNoisePatterns {
+		id := fmt.Sprintf("noise:%s:%d", tr.ID, i)
+		nodes = upsertNode(nodes, MemoryNode{
+			ID:          id,
+			Type:        "state",
+			Content:     pattern,
+			Timestamp:   now,
+			Confidence:  0.9,
+			Quality:     QualityCorrupted,
+			Constraint:  &Constraint{Type: "avoid", Text: pattern, Source: id},
+			TruthLocked: false,
+		})
+		edges = appendEdge(edges, MemoryEdge{From: id, To: traceNode.ID, Relation: "contradicts"})
+	}
+	if len(nodes) > 300 {
+		nodes = nodes[len(nodes)-300:]
+	}
+	if len(edges) > 600 {
+		edges = edges[len(edges)-600:]
+	}
+	if len(decisions) > 100 {
+		decisions = decisions[len(decisions)-100:]
+	}
+	return nodes, edges, decisions
+}
+
+func updateExecutionState(prev ExecutionState, tr ExecutionTrace, learning SystemLearning) ExecutionState {
+	st := ExecutionState{
+		GoalState:         tr.Goal,
+		CurrentPhase:      phaseForOutcome(tr.Outcome),
+		KnownFacts:        append([]string(nil), prev.KnownFacts...),
+		ActiveConstraints: append([]Constraint(nil), prev.ActiveConstraints...),
+		FailedStrategies:  append([]string(nil), prev.FailedStrategies...),
+		UpdatedAt:         time.Now().UTC(),
+	}
+	if tr.Outcome == "success" {
+		st.KnownFacts = append(st.KnownFacts, "strategy succeeded: "+strings.Join(tr.StrategyUsed, ","))
+	} else {
+		for _, bad := range learning.BadStrategies {
+			st.FailedStrategies = append(st.FailedStrategies, bad)
+		}
+	}
+	for _, improvement := range learning.CompilerImprovements {
+		st.ActiveConstraints = appendConstraint(st.ActiveConstraints, Constraint{Type: "reference", Text: improvement, Source: "learning:" + learning.TraceID})
+	}
+	st.KnownFacts = lastNStrings(dedupeStrings(st.KnownFacts), 40)
+	st.FailedStrategies = lastNStrings(dedupeStrings(st.FailedStrategies), 20)
+	if len(st.ActiveConstraints) > 40 {
+		st.ActiveConstraints = st.ActiveConstraints[len(st.ActiveConstraints)-40:]
+	}
+	return st
+}
+
+func upsertNode(nodes []MemoryNode, next MemoryNode) []MemoryNode {
+	if next.ID == "" {
+		return nodes
+	}
+	for i, node := range nodes {
+		if node.ID != next.ID {
+			continue
+		}
+		if node.TruthLocked {
+			return nodes
+		}
+		nodes[i] = next
+		return nodes
+	}
+	return append(nodes, next)
+}
+
+func appendDecision(decisions []DecisionNode, next DecisionNode) []DecisionNode {
+	for _, d := range decisions {
+		if d.ID == next.ID {
+			return decisions
+		}
+	}
+	return append(decisions, next)
+}
+
+func appendEdge(edges []MemoryEdge, next MemoryEdge) []MemoryEdge {
+	if next.From == "" || next.To == "" || next.Relation == "" {
+		return edges
+	}
+	for _, e := range edges {
+		if e == next {
+			return edges
+		}
+	}
+	return append(edges, next)
+}
+
+func confidenceForOutcome(outcome string) float64 {
+	switch outcome {
+	case "success":
+		return 0.9
+	case "partial_success":
+		return 0.65
+	default:
+		return 0.45
+	}
+}
+
+func qualityForOutcome(outcome string) MemoryQuality {
+	switch outcome {
+	case "success":
+		return QualityHighSignal
+	case "partial_success":
+		return QualityMediumSignal
+	default:
+		return QualityNoise
+	}
+}
+
+func phaseForOutcome(outcome string) string {
+	switch outcome {
+	case "success":
+		return "validated"
+	case "partial_success":
+		return "needs_followup"
+	default:
+		return "failed"
+	}
+}
+
+func firstNonEmpty(ss []string, fallback string) string {
+	for _, s := range ss {
+		if strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return fallback
+}
+
+func lastNStrings(ss []string, n int) []string {
+	if len(ss) <= n {
+		return ss
+	}
+	return ss[len(ss)-n:]
+}
+
+func validMutation(m CompilerMutation) bool {
+	switch m.Target {
+	case "memory_router", "scoring", "ir_builder", "strategy_selector", "noise_filter":
+	default:
+		return false
+	}
+	switch m.Change {
+	case "increase_weight", "decrease_weight", "decrease_k", "increase_k", "change_decay", "add_constraint", "quarantine_pattern":
+		return true
+	default:
+		return false
+	}
+}
+
+func updateStrategy(strategies []Strategy, id, outcome string) []Strategy {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = "general"
+	}
+	strategies = ensureBuiltInStrategies(strategies)
+	for i := range strategies {
+		if strategies[i].ID != id {
+			continue
+		}
+		if outcome == "success" {
+			strategies[i].Successes++
+		} else {
+			strategies[i].Failures++
+		}
+		strategies[i].LastUsedAt = time.Now().UTC()
+		return strategies
+	}
+	s := Strategy{ID: id, LastUsedAt: time.Now().UTC()}
+	if outcome == "success" {
+		s.Successes = 1
+	} else {
+		s.Failures = 1
+	}
+	return append(strategies, s)
+}
+
+func ensureBuiltInStrategies(strategies []Strategy) []Strategy {
+	byID := map[string]int{}
+	for i, s := range strategies {
+		byID[s.ID] = i
+	}
+	for _, builtin := range builtInStrategies() {
+		if idx, ok := byID[builtin.ID]; ok {
+			if strategies[idx].Description == "" {
+				strategies[idx].Description = builtin.Description
+			}
+			if len(strategies[idx].ExecutionPlan) == 0 {
+				strategies[idx].ExecutionPlan = append([]Step(nil), builtin.ExecutionPlan...)
+			}
+			if len(strategies[idx].Preconditions) == 0 {
+				strategies[idx].Preconditions = append([]string(nil), builtin.Preconditions...)
+			}
+			continue
+		}
+		strategies = append(strategies, builtin)
+	}
+	return strategies
+}
+
+func builtInStrategies() []Strategy {
+	return []Strategy{
+		{
+			ID:            "code-review",
+			Description:   "Inspect the real execution path, prioritize bugs and regressions, then verify with focused checks.",
+			Preconditions: []string{"review", "pr", "diff"},
+			ExecutionPlan: []Step{
+				{ID: "review-diff", Action: "Inspect the real diff and touched code paths."},
+				{ID: "verify-behavior", Action: "Run or identify focused checks that cover the changed behavior."},
+				{ID: "report-findings", Action: "Report only actionable findings with file and line evidence."},
+			},
+		},
+		{
+			ID:            "bugfix-reproduce-first",
+			Description:   "Reproduce or localize the failing behavior before patching, then validate the repair.",
+			Preconditions: []string{"bug", "fix", "error", "修复"},
+			ExecutionPlan: []Step{
+				{ID: "reproduce", Action: "Reproduce or trace the failure to a concrete source of truth."},
+				{ID: "patch", Action: "Patch the smallest boundary that owns the failing behavior."},
+				{ID: "validate", Action: "Run focused validation that would fail before the patch."},
+			},
+		},
+		{
+			ID:            "frontend-visual-verify",
+			Description:   "Validate frontend work with type checks and a rendered UI inspection when behavior is visual.",
+			Preconditions: []string{"frontend", "ui", "desktop", "前端"},
+			ExecutionPlan: []Step{
+				{ID: "inspect-ui", Action: "Locate the relevant component, state, and i18n wiring."},
+				{ID: "implement-ui", Action: "Implement the control using existing design-system patterns."},
+				{ID: "verify-ui", Action: "Run type checks and inspect the rendered interaction when practical."},
+			},
+		},
+		{
+			ID:            "long-horizon-autoresearch",
+			Description:   "Use durable state, evidence, and pivots for long-running goals.",
+			Preconditions: []string{"goal", "research", "持续"},
+			ExecutionPlan: []Step{
+				{ID: "load-state", Action: "Read the durable task state and previous directions."},
+				{ID: "evidence-chunk", Action: "Execute the smallest evidence-producing next chunk."},
+				{ID: "writeback", Action: "Persist trace, findings, and next constraints before reporting."},
+			},
+		},
+		{
+			ID:          "general",
+			Description: "Default source-first execution strategy.",
+			ExecutionPlan: []Step{
+				{ID: "inspect", Action: "Inspect current state before acting."},
+				{ID: "change", Action: "Make the smallest change that satisfies the task."},
+				{ID: "check", Action: "Run focused validation and summarize evidence."},
+			},
+		},
+	}
+}
+
+func classifyStrategy(goal string) string {
+	lower := strings.ToLower(goal)
+	switch {
+	case strings.Contains(lower, "review") || strings.Contains(goal, "评审"):
+		return "code-review"
+	case strings.Contains(lower, "bug") || strings.Contains(lower, "fix") || strings.Contains(goal, "修复"):
+		return "bugfix-reproduce-first"
+	case strings.Contains(lower, "frontend") || strings.Contains(lower, "ui") || strings.Contains(goal, "前端"):
+		return "frontend-visual-verify"
+	case strings.Contains(lower, "goal") || strings.Contains(lower, "research") || strings.Contains(goal, "持续"):
+		return "long-horizon-autoresearch"
+	default:
+		return "general"
+	}
+}
+
+func summarizeGoal(input string) string {
+	input = strings.TrimSpace(input)
+	input = strings.Join(strings.Fields(input), " ")
+	if len([]rune(input)) > 180 {
+		r := []rune(input)
+		return string(r[:180]) + "..."
+	}
+	return input
+}
+
+func traceID(t time.Time) string {
+	return t.UTC().Format("20060102T150405.000000000")
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+func (r *Runtime) loadState() state {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.loadStateLocked()
+}
+
+func (r *Runtime) loadStateLocked() state {
+	var st state
+	b, err := os.ReadFile(filepath.Join(r.dir, stateFile))
+	if err != nil {
+		return state{NoisyRefs: map[string]int{}}
+	}
+	if err := json.Unmarshal(b, &st); err != nil {
+		return state{NoisyRefs: map[string]int{}}
+	}
+	if st.NoisyRefs == nil {
+		st.NoisyRefs = map[string]int{}
+	}
+	return st
+}
+
+func appendJSONL(path string, v any) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		return err
+	}
+	return w.Flush()
+}
+
+func writeJSON(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	b = append(b, '\n')
+	return fileutil.AtomicWriteFile(path, b, 0o644)
+}

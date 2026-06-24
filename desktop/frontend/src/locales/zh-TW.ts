@@ -665,6 +665,8 @@ export const zhTW: Record<DictKey, string> = {
   "settings.autoPlan": "自動計畫模式",
   "settings.autoPlan.off": "關閉",
   "settings.autoPlan.on": "開啟",
+  "settings.memoryCompiler": "Memory v5",
+  "settings.memoryCompilerHint": "開啟執行型記憶編譯器，用歷史執行結果生成和優化下一步行動計畫。",
   "settings.agentRuntime": "Agent 執行",
   "settings.agentRuntimeHint": "輪數上限只認全域設定；專案裡的 ./reasonix.toml 不覆蓋。0 表示不限。",
   "settings.executorMaxSteps": "執行輪數上限",

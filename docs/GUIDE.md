@@ -356,6 +356,9 @@ Agent-initiated `remember` and `forget` calls always ask for fresh approval and
 show a compact preview of the saved or archived memory before they run.
 Retrieval keeps the top BM25 result while trimming weak common-word matches, and
 0-result responses suggest narrower, more distinctive follow-up searches.
+Memory v5 is enabled by default. It records local execution traces and compiler
+state under Reasonix home, then injects a compact Planner IR only when prior
+outcomes produce actionable constraints; disable it from Settings → General.
 For implementation details, see
 [`SESSION_MEMORY_RETRIEVAL.md`](SESSION_MEMORY_RETRIEVAL.md).
 

@@ -165,6 +165,7 @@ type SettingsView struct {
 	CheckUpdates       bool            `json:"checkUpdates"`
 	Telemetry          bool            `json:"telemetry"`
 	Metrics            bool            `json:"metrics"`
+	MemoryCompiler     bool            `json:"memoryCompilerEnabled"`
 	ExpandThinking     bool            `json:"expandThinking"`
 	ConfigPath         string          `json:"configPath"`
 	// ProviderKinds lists the provider implementations the kernel actually
@@ -427,6 +428,7 @@ func (a *App) Settings() SettingsView {
 			CheckUpdates:       true,
 			Telemetry:          true,
 			Metrics:            true,
+			MemoryCompiler:     true,
 			ExpandThinking:     false,
 		}
 	}
@@ -483,6 +485,7 @@ func (a *App) Settings() SettingsView {
 		CheckUpdates:       cfg.DesktopCheckUpdates(),
 		Telemetry:          cfg.DesktopTelemetry(),
 		Metrics:            cfg.DesktopMetrics(),
+		MemoryCompiler:     cfg.MemoryCompilerEnabled(),
 		ExpandThinking:     cfg.Desktop.ExpandThinking,
 		ConfigPath:         cfgPath,
 		ProviderKinds:      nonNil(provider.Kinds()),
@@ -1054,6 +1057,13 @@ func (a *App) SetAutoPlan(mode string) error {
 		return a.rebuild()
 	}
 	return nil
+}
+
+// SetMemoryCompilerEnabled toggles the Memory v5 execution compiler.
+func (a *App) SetMemoryCompilerEnabled(enabled bool) error {
+	return a.applyConfigChange(func(c *config.Config) error {
+		return c.SetMemoryCompilerEnabled(enabled)
+	})
 }
 
 func desktopAutoPlanMode(mode string) string {

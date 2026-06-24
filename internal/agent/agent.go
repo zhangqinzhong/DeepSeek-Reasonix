@@ -18,6 +18,7 @@ import (
 	"reasonix/internal/instruction"
 	"reasonix/internal/jobs"
 	"reasonix/internal/memory"
+	"reasonix/internal/memorycompiler"
 	"reasonix/internal/nilutil"
 	"reasonix/internal/provider"
 	"reasonix/internal/tool"
@@ -310,6 +311,12 @@ type Agent struct {
 	// session without touching the cache-stable prefix. Set via SetMemoryQueue.
 	memQueue memory.Queue
 
+	// memoryCompiler, when non-nil, records execution traces and may inject a
+	// compact Planner IR into the turn tail. It never mutates the stable system
+	// prompt or tool schema.
+	memoryCompiler *memorycompiler.Runtime
+	compilerTurn   *memorycompiler.Turn
+
 	// planModeAllowedTools is the set of tool names that are exempt from the
 	// plan-mode gate. When non-empty, these tools bypass the read-only check.
 	// Populated from Options.PlanModeAllowedTools during construction.
@@ -584,6 +591,10 @@ type Options struct {
 	// returns false. Use sparingly; the caller is responsible for ensuring the
 	// tool invocation is safe in a read-only context (e.g. bash for git status).
 	PlanModeAllowedTools []string
+
+	// MemoryCompiler enables Memory v5 execution trace writeback and Planner IR
+	// turn-tail injection.
+	MemoryCompiler *memorycompiler.Runtime
 }
 
 func stringSet(ss []string) map[string]bool {
@@ -652,6 +663,7 @@ func New(prov provider.Provider, tools *tool.Registry, session *Session, opts Op
 		archiveDir:           opts.ArchiveDir,
 		keepPolicy:           opts.KeepPolicy,
 		planModeAllowedTools: stringSet(opts.PlanModeAllowedTools),
+		memoryCompiler:       opts.MemoryCompiler,
 	}
 	a.SetReasoningLanguage(opts.ReasoningLanguage)
 	return a
@@ -671,7 +683,7 @@ func usageSourceOrDefault(source, fallback string) string {
 // finishing, and the real safety bounds are user cancellation and compaction, not
 // a round count. A positive maxSteps imposes an optional hard guard, surfaced as
 // a resumable notice when hit.
-func (a *Agent) Run(ctx context.Context, input string) error {
+func (a *Agent) Run(ctx context.Context, input string) (runErr error) {
 	defer a.clearSteerQueue()
 	a.steerMu.Lock()
 	a.steerConsumed = false
@@ -682,6 +694,20 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 	a.repeatSuccessCounts = nil
 	a.sink.Emit(event.Event{Kind: event.TurnStarted})
 	input = a.withReasoningLanguage(input)
+	if a.memoryCompiler != nil {
+		if irContext, turn := a.memoryCompiler.StartTurn(ctx, input, a.session.Snapshot()); turn != nil {
+			a.compilerTurn = turn
+			defer func() {
+				turn.Finish(runErr)
+				if a.compilerTurn == turn {
+					a.compilerTurn = nil
+				}
+			}()
+			if strings.TrimSpace(irContext) != "" {
+				input = strings.TrimRight(input, "\n") + "\n\n" + irContext
+			}
+		}
+	}
 	a.session.Add(provider.Message{Role: provider.RoleUser, Content: input, Images: userImages(ctx)})
 
 	finalReadinessBlocks := 0
@@ -1516,6 +1542,24 @@ func (a *Agent) executeBatch(ctx context.Context, calls []provider.ToolCall) []s
 		if o.truncated && o.truncMsg != "" {
 			a.sink.Emit(event.Event{Kind: event.Notice, Level: event.LevelInfo, Text: o.truncMsg})
 		}
+	}
+	if a.compilerTurn != nil {
+		records := make([]memorycompiler.ToolRecord, 0, len(calls))
+		for i, c := range calls {
+			o := outcomes[i]
+			t, ok := a.tools.Get(c.Name)
+			records = append(records, memorycompiler.ToolRecord{
+				ID:         c.ID,
+				Name:       c.Name,
+				Args:       c.Arguments,
+				Output:     o.output,
+				Error:      o.errMsg,
+				ReadOnly:   ok && t.ReadOnly(),
+				DurationMs: durations[i],
+				Truncated:  o.truncated,
+			})
+		}
+		a.compilerTurn.RecordToolResults(records)
 	}
 	if !cancelled {
 		a.applyStormBreaker(calls, outcomes, results)

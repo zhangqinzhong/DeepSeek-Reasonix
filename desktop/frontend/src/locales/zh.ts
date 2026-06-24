@@ -907,6 +907,8 @@ export const zh: Record<DictKey, string> = {
   "settings.autoPlan": "自动计划模式",
   "settings.autoPlan.off": "关闭",
   "settings.autoPlan.on": "开启",
+  "settings.memoryCompiler": "Memory v5",
+  "settings.memoryCompilerHint": "开启执行型记忆编译器，用历史执行结果生成和优化下一步行动计划。",
   "settings.agentRuntime": "Agent 运行",
   "settings.agentRuntimeHint": "轮数上限只认全局设置；项目里的 ./reasonix.toml 不覆盖。0 表示不限。",
   "settings.executorMaxSteps": "执行轮数上限",
