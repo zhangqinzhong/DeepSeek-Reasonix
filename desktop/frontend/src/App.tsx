@@ -68,6 +68,7 @@ import {
   type ComposerInsertRequest,
   type DesktopStartupSettingsView,
   type Mode,
+  modeHasPlan,
   type ProjectNode,
   type SessionMeta,
   type SettingsView,
@@ -86,8 +87,12 @@ import {
   hydrateComposerProfileFromMeta,
   hydrateComposerProfilesFromTabs,
   patchComposerProfile,
+  pruneUserPlanModeIntents,
+  shouldRestoreUserPlanMode,
+  updateUserPlanModeIntent,
   type ComposerProfile,
   type ComposerProfileField,
+  type UserPlanModeIntents,
 } from "./lib/composerProfile";
 import {
   restorableToolApprovalMode,
@@ -821,6 +826,7 @@ export default function App() {
   const t = useT();
   const [composerProfilesByTab, setComposerProfilesByTab] = useState<Record<string, ComposerProfile>>({});
   const yoloRestoreToolApprovalModesRef = useRef<Record<string, RestorableToolApprovalMode>>({});
+  const userPlanModeByTabRef = useRef<UserPlanModeIntents>({});
   const [tabMetas, setTabMetas] = useState<TabMeta[]>([]);
   const [tabOrderIds, setTabOrderIds] = useState<string[]>([]);
   const [tabRevealSignal, setTabRevealSignal] = useState(0);
@@ -1100,6 +1106,7 @@ export default function App() {
   const footerHeightRef = useRef(0);
   const footerRef = useRef<HTMLElement>(null);
   const runningRef = useRef(state.running);
+  const activeTabIdRef = useRef(activeTabId);
   const rightDockDetailActive = rightDockMode !== "context" && workspacePreviewActive;
   const preferredWorkspacePanelWidth = rightDockDetailActive ? rightDockPreviewWidth : rightDockTreeWidth;
   const workspacePanelMinWidth = rightDockDetailActive ? RIGHT_DOCK_PREVIEW_MIN_WIDTH : RIGHT_DOCK_TREE_MIN_WIDTH;
@@ -1243,6 +1250,7 @@ export default function App() {
     for (const id of Object.keys(yoloRestoreToolApprovalModesRef.current)) {
       if (!ids.has(id)) delete yoloRestoreToolApprovalModesRef.current[id];
     }
+    userPlanModeByTabRef.current = pruneUserPlanModeIntents(userPlanModeByTabRef.current, ids);
     setComposerProfilesByTab((current) => hydrateComposerProfilesFromTabs(current, tabMetas));
   }, [tabMetas]);
 
@@ -1271,13 +1279,17 @@ export default function App() {
   // normal clears both.
   const applyMode = useCallback(
     (m: Mode) => {
+      userPlanModeByTabRef.current = updateUserPlanModeIntent(userPlanModeByTabRef.current, activeTabId, modeHasPlan(m));
       patchActiveComposerProfile(composerProfileWithMode(m), ["collaborationMode", "toolApprovalMode", "goal"]);
       void syncModeToController(m);
     },
-    [patchActiveComposerProfile, syncModeToController],
+    [activeTabId, patchActiveComposerProfile, syncModeToController],
   );
   const applyCollaborationMode = useCallback(
-    (m: CollaborationMode): Promise<void> => {
+    (m: CollaborationMode, options: { rememberUserIntent?: boolean } = {}): Promise<void> => {
+      if (options.rememberUserIntent !== false) {
+        userPlanModeByTabRef.current = updateUserPlanModeIntent(userPlanModeByTabRef.current, activeTabId, m === "plan");
+      }
       if (m === "goal") {
         patchActiveComposerProfile({ collaborationMode: "normal", goalDraftMode: true, goal: "" }, ["collaborationMode", "goal"]);
         return setControllerCollaborationMode("normal");
@@ -1285,7 +1297,7 @@ export default function App() {
       patchActiveComposerProfile({ collaborationMode: m, goalDraftMode: false, goal: "" }, ["collaborationMode", "goal"]);
       return setControllerCollaborationMode(m);
     },
-    [patchActiveComposerProfile, setControllerCollaborationMode],
+    [activeTabId, patchActiveComposerProfile, setControllerCollaborationMode],
   );
   const applyToolApprovalMode = useCallback(
     (m: ToolApprovalMode) => {
@@ -1315,6 +1327,7 @@ export default function App() {
   }, [activeTabId, applyToolApprovalMode, toolApprovalMode]);
   const applyGoal = useCallback(
     (nextGoal: string) => {
+      userPlanModeByTabRef.current = updateUserPlanModeIntent(userPlanModeByTabRef.current, activeTabId, false);
       const trimmed = nextGoal.trim();
       patchActiveComposerProfile({
         collaborationMode: trimmed ? "goal" : "normal",
@@ -1323,7 +1336,7 @@ export default function App() {
       }, ["collaborationMode", "goal"]);
       void (trimmed ? setControllerGoal(trimmed) : clearControllerGoal());
     },
-    [clearControllerGoal, patchActiveComposerProfile, setControllerGoal],
+    [activeTabId, clearControllerGoal, patchActiveComposerProfile, setControllerGoal],
   );
   const applyTokenMode = useCallback(
     (m: TokenMode) => {
@@ -1469,6 +1482,10 @@ export default function App() {
     runningRef.current = state.running;
   }, [state.running]);
 
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
+
   // handleSend intercepts slash commands that need a desktop-native action before
   // they reach the backend: "/model <ref>" rebuilds on that model, "/memory"
   // opens Settings, and "/clear" shows an in-app confirmation card. Everything else — skills (/init, …),
@@ -1582,13 +1599,29 @@ export default function App() {
   useEffect(() => {
     const unsub = onEvent((e) => {
       if (e.kind !== "turn_done") return;
+      const turnTabId = activeTabIdRef.current;
       window.setTimeout(() => {
         setProjectRevision((value) => value + 1);
-        void refreshTabMetas();
+        refreshTabMetas().then((tabs) => {
+          if (!turnTabId) return;
+          if (!shouldRestoreUserPlanMode(userPlanModeByTabRef.current, turnTabId)) return;
+          const tab = tabs.find((item) => item.id === turnTabId);
+          const baseProfile = tab ? composerProfileFromTab(tab) : defaultComposerProfile;
+          setComposerProfilesByTab((current) => patchComposerProfile(
+            current,
+            turnTabId,
+            current[turnTabId] ?? baseProfile,
+            { collaborationMode: "plan", goalDraftMode: false, goal: "" },
+            ["collaborationMode", "goal"],
+          ));
+          if (activeTabIdRef.current === turnTabId) {
+            void setControllerCollaborationMode("plan");
+          }
+        });
       }, 250);
     });
     return unsub;
-  }, [refreshTabMetas]);
+  }, [refreshTabMetas, setControllerCollaborationMode]);
 
   const blankSessionTarget = useCallback(() => {
     const activeWorkspaceRoot = activeTab?.scope === "project" ? activeTab.workspaceRoot || "" : "";
@@ -3105,7 +3138,7 @@ export default function App() {
                   // Approving an exit_plan_mode plan leaves plan mode; await the
                   // mode switch before sending the approval so the controller
                   // observes the updated state before it unblocks.
-                  if (state.approval!.tool === "exit_plan_mode" && allow) await applyCollaborationMode("normal");
+                  if (state.approval!.tool === "exit_plan_mode" && allow) await applyCollaborationMode("normal", { rememberUserIntent: false });
                   approve(state.approval!.id, allow, session, persist);
                 }}
                 onRevisePlan={(text) => {

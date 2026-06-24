@@ -7,7 +7,11 @@ import {
   hydrateComposerProfileFromMeta,
   hydrateComposerProfilesFromTabs,
   patchComposerProfile,
+  pruneUserPlanModeIntents,
+  shouldRestoreUserPlanMode,
+  updateUserPlanModeIntent,
   type ComposerProfilesByTab,
+  type UserPlanModeIntents,
 } from "../lib/composerProfile";
 import type { Meta, TabMeta } from "../lib/types";
 
@@ -136,6 +140,28 @@ console.log("\ncomposer profile");
   profiles = hydrateComposerProfilesFromTabs(profiles, [tab()]);
 
   eq(Boolean(profiles["tab-2"]), false, "tab hydration removes profiles for closed tabs");
+}
+
+{
+  let intents: UserPlanModeIntents = {};
+  intents = updateUserPlanModeIntent(intents, "tab-1", true);
+  intents = updateUserPlanModeIntent(intents, "tab-2", false);
+
+  eq(shouldRestoreUserPlanMode(intents, "tab-1"), true, "manual plan intent restores only the tab that enabled it");
+  eq(shouldRestoreUserPlanMode(intents, "tab-2"), false, "normal tabs do not inherit another tab's plan intent");
+
+  intents = updateUserPlanModeIntent(intents, "tab-1", false);
+  eq(shouldRestoreUserPlanMode(intents, "tab-1"), false, "manual normal mode clears plan restore intent");
+}
+
+{
+  let intents: UserPlanModeIntents = {};
+  intents = updateUserPlanModeIntent(intents, "tab-1", true);
+  intents = updateUserPlanModeIntent(intents, "tab-2", true);
+  intents = pruneUserPlanModeIntents(intents, ["tab-2"]);
+
+  eq(shouldRestoreUserPlanMode(intents, "tab-1"), false, "closed tabs lose plan restore intent");
+  eq(shouldRestoreUserPlanMode(intents, "tab-2"), true, "open tabs keep plan restore intent");
 }
 
 console.log(`\n${passed} passed, ${failed} failed, ${passed + failed} total`);
