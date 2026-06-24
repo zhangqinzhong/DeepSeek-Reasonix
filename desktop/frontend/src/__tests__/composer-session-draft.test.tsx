@@ -5,6 +5,7 @@ import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { Composer } from "../components/Composer";
+import { composerDraftKeyForTab } from "../lib/composerDraftKey";
 import { LocaleProvider } from "../lib/i18n";
 import { ToastProvider } from "../lib/toast";
 import type { CollaborationMode, TokenMode, ToolApprovalMode } from "../lib/types";
@@ -31,6 +32,14 @@ function flushTimers(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 class TestResizeObserver {
   observe() {}
   unobserve() {}
@@ -54,6 +63,8 @@ function installDom() {
   globalThis.KeyboardEvent = dom.window.KeyboardEvent;
   globalThis.InputEvent = dom.window.InputEvent;
   globalThis.MouseEvent = dom.window.MouseEvent;
+  globalThis.File = dom.window.File;
+  globalThis.FileReader = dom.window.FileReader;
   globalThis.PointerEvent = dom.window.MouseEvent as unknown as typeof PointerEvent;
   globalThis.MutationObserver = dom.window.MutationObserver;
   globalThis.localStorage = dom.window.localStorage;
@@ -76,6 +87,19 @@ function installDom() {
     }),
   });
   return dom;
+}
+
+function installBridgeApp(methods: Record<string, unknown>) {
+  (window as unknown as { go: { main: { App: Record<string, unknown> } } }).go = {
+    main: {
+      App: {
+        Commands: async () => [],
+        Models: async () => [],
+        ModelsForTab: async () => [],
+        ...methods,
+      },
+    },
+  };
 }
 
 async function renderComposer(props: Partial<Parameters<typeof Composer>[0]> = {}) {
@@ -136,6 +160,24 @@ function contextItemCount(): number {
 console.log("\ncomposer session draft");
 
 {
+  const withoutPath = composerDraftKeyForTab({
+    id: "tab-a",
+    scope: "project",
+    workspaceRoot: "/repo",
+    topicId: "topic-a",
+    sessionPath: "",
+  }, "tab-a");
+  const withPath = composerDraftKeyForTab({
+    id: "tab-a",
+    scope: "project",
+    workspaceRoot: "/repo",
+    topicId: "topic-a",
+    sessionPath: "/repo/.reasonix/sessions/topic-a.jsonl",
+  }, "tab-a");
+  eq(withPath, withoutPath, "topic draft key stays stable when session path appears");
+}
+
+{
   const dom = installDom();
   const { root, rerender } = await renderComposer();
 
@@ -158,6 +200,49 @@ console.log("\ncomposer session draft");
   await rerender({ sessionKey: "session:project:/repo:topic-b:session-b" });
   eq(textarea().value, "draft for B", "session B text is restored independently");
   eq(contextItemCount(), 0, "session B context refs stay isolated");
+
+  await act(async () => {
+    root.unmount();
+  });
+  dom.window.close();
+}
+
+{
+  const dom = installDom();
+  const saveStarted = deferred<void>();
+  const savePastedFile = deferred<string>();
+  installBridgeApp({
+    SavePastedFile: async () => {
+      saveStarted.resolve();
+      return savePastedFile.promise;
+    },
+  });
+  const { root, rerender } = await renderComposer();
+  const file = new File(["draft attachment"], "draft.txt", { type: "text/plain", lastModified: 1 });
+  const event = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "clipboardData", {
+    configurable: true,
+    value: {
+      files: [file],
+      items: [],
+      types: [],
+      getData: () => "",
+    },
+  });
+
+  await act(async () => {
+    textarea().dispatchEvent(event);
+    await saveStarted.promise;
+  });
+  await rerender({ sessionKey: "session:project:/repo:topic-b:session-b" });
+  await act(async () => {
+    savePastedFile.resolve("/tmp/reasonix/draft.txt");
+    await flushTimers();
+  });
+  eq(contextItemCount(), 0, "async attachment does not land in the switched-to session");
+
+  await rerender({ sessionKey: "session:project:/repo:topic-a:session-a" });
+  eq(contextItemCount(), 1, "async attachment returns to the source session draft");
 
   await act(async () => {
     root.unmount();

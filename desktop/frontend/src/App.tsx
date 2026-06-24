@@ -138,6 +138,7 @@ import { availableWorkspacePanelWidth, resolveLiveWorkspacePanelWidth, resolveWo
 import { createRafResizeUpdater } from "./lib/resizeDrag";
 import { useGlobalShortcut } from "./lib/keyboardShortcuts";
 import { topicShortcutIndexFromEvent, useTopicShortcuts, type TopicShortcutEntry } from "./lib/topicShortcuts";
+import { composerDraftKeyForTab } from "./lib/composerDraftKey";
 import logoWordmark from "./assets/logo-wordmark.svg";
 
 const HistoryPanel = lazy(() => import("./components/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
@@ -1144,15 +1145,7 @@ export default function App() {
     [activeTabId, tabMetas],
   );
   const composerSessionKey = useMemo(() => {
-    if (!activeTab) return activeTabId ?? "";
-    const scope = activeTab.scope === "project" ? "project" : "global";
-    const workspaceRoot = scope === "project" ? activeTab.workspaceRoot || "" : "";
-    const topicId = activeTab.topicId || "";
-    const sessionPath = activeTab.sessionPath || "";
-    if (topicId || sessionPath) {
-      return ["session", scope, workspaceRoot, topicId, sessionPath].join("\u0000");
-    }
-    return ["tab", activeTab.id || activeTabId || ""].join("\u0000");
+    return composerDraftKeyForTab(activeTab, activeTabId);
   }, [activeTab, activeTabId]);
   const sidebarImDetailConnection = useMemo(
     () => sidebarImConnections.find((connection) => connection.id === sidebarImDetailConnectionId) ?? null,
