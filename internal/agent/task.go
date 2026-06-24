@@ -37,6 +37,7 @@ var subagentMetaTools = []string{
 	"read_only_task",
 	"parallel_tasks",
 	"run_skill",
+	"read_only_skill",
 	"read_skill",
 	"install_skill",
 	"install_source",

@@ -38,6 +38,7 @@ func TestSubagentToolRegistryFiltersUnavailableToolsAndWrapsBash(t *testing.T) {
 		"read_only_task",
 		"parallel_tasks",
 		"run_skill",
+		"read_only_skill",
 		"read_skill",
 		"install_skill",
 		"install_source",
@@ -64,6 +65,7 @@ func TestSubagentToolRegistryFiltersUnavailableToolsAndWrapsBash(t *testing.T) {
 		"read_only_task",
 		"parallel_tasks",
 		"run_skill",
+		"read_only_skill",
 		"read_skill",
 		"install_skill",
 		"install_source",
@@ -105,6 +107,7 @@ func TestReadOnlySubagentToolRegistryKeepsOnlyResearchToolsAndSafeBash(t *testin
 	parent := tool.NewRegistry()
 	parent.Add(subagentRegistryTool{name: "task"})
 	parent.Add(subagentRegistryTool{name: "read_only_task"})
+	parent.Add(subagentRegistryTool{name: "read_only_skill", readOnly: true})
 	parent.Add(subagentRegistryTool{name: "write_file"})
 	parent.Add(subagentRegistryTool{name: "remember"})
 	parent.Add(subagentRegistryTool{name: "todo_write", readOnly: true})
@@ -118,7 +121,7 @@ func TestReadOnlySubagentToolRegistryKeepsOnlyResearchToolsAndSafeBash(t *testin
 	})
 
 	sub := ReadOnlySubagentToolRegistry(parent, nil)
-	for _, hidden := range []string{"task", "read_only_task", "write_file", "remember", "todo_write", "complete_step", "connect_tool_source"} {
+	for _, hidden := range []string{"task", "read_only_task", "read_only_skill", "write_file", "remember", "todo_write", "complete_step", "connect_tool_source"} {
 		if _, ok := sub.Get(hidden); ok {
 			t.Fatalf("read-only subagent registry should hide %q; got %v", hidden, sub.Names())
 		}
@@ -150,6 +153,7 @@ func TestTaskToolBuildSubRegUsesSubagentToolRegistry(t *testing.T) {
 	parent := tool.NewRegistry()
 	parent.Add(subagentRegistryTool{name: "task"})
 	parent.Add(subagentRegistryTool{name: "read_only_task"})
+	parent.Add(subagentRegistryTool{name: "read_only_skill", readOnly: true})
 	parent.Add(subagentRegistryTool{name: "parallel_tasks"})
 	parent.Add(subagentRegistryTool{name: "wait"})
 	parent.Add(subagentRegistryTool{
@@ -159,7 +163,7 @@ func TestTaskToolBuildSubRegUsesSubagentToolRegistry(t *testing.T) {
 	task := &TaskTool{parentReg: parent}
 
 	sub := task.buildSubReg(nil)
-	for _, hidden := range []string{"task", "read_only_task", "parallel_tasks", "wait"} {
+	for _, hidden := range []string{"task", "read_only_task", "read_only_skill", "parallel_tasks", "wait"} {
 		if _, ok := sub.Get(hidden); ok {
 			t.Fatalf("task subagent registry should hide %q; got %v", hidden, sub.Names())
 		}

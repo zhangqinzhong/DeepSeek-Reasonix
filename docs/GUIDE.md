@@ -459,9 +459,13 @@ run them on another configured model, or use `subagent_models` to override only
 specific skills such as `review` or `security_review`.
 
 Use `read_only_task` when planning needs isolated, deeper research without
-granting write-capable delegation. It runs an ephemeral subagent with only
-read-only research tools plus safe foreground bash, returns only the final
-answer, and does not create a resumable subagent transcript.
+granting write-capable delegation. Use `read_only_skill` when the same need is
+best expressed through an existing skill. Both run ephemeral read-only
+subagents with only read-only research tools plus safe foreground bash, return
+only the final answer, and do not create resumable subagent transcripts. In
+token economy mode, connect only this narrow surface with
+`connect_tool_source(source="read_only_skill")`; the full `skills` source still
+enables writer-capable skill tools and remains blocked in plan mode.
 
 For interactive frontends, plan mode is manual by default. Set
 `agent.auto_plan = "on"` to make complex-looking tasks enter plan mode

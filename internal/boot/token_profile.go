@@ -18,7 +18,7 @@ const (
 	TokenModeEconomy = "economy"
 )
 
-const tokenEconomyPrompt = `Token economy mode is on. Keep the default tool surface lean. Optional sources are hidden behind connect_tool_source; enable skills, MCP servers, LSP, web_fetch, install_source, task, or read_only_task only when the current request actually needs them.`
+const tokenEconomyPrompt = `Token economy mode is on. Keep the default tool surface lean. Optional sources are hidden behind connect_tool_source; enable skills, read_only_skill, MCP servers, LSP, web_fetch, install_source, task, or read_only_task only when the current request actually needs them.`
 
 var tokenEconomyCoreBuiltins = []string{
 	"bash",
@@ -71,20 +71,21 @@ func tokenEconomyBuiltins(configured []string) []string {
 type toolSourceConnector struct {
 	mu sync.Mutex
 
-	skills       func(context.Context) (string, error)
-	task         func(context.Context) (string, error)
-	readOnlyTask func(context.Context) (string, error)
-	install      func(context.Context) (string, error)
-	webFetch     func(context.Context) (string, error)
-	lsp          func(context.Context) (string, error)
-	mcp          func(context.Context, string) (string, error)
-	mcpNames     []string
+	skills        func(context.Context) (string, error)
+	readOnlySkill func(context.Context) (string, error)
+	task          func(context.Context) (string, error)
+	readOnlyTask  func(context.Context) (string, error)
+	install       func(context.Context) (string, error)
+	webFetch      func(context.Context) (string, error)
+	lsp           func(context.Context) (string, error)
+	mcp           func(context.Context, string) (string, error)
+	mcpNames      []string
 }
 
 func (*toolSourceConnector) Name() string { return "connect_tool_source" }
 
 func (*toolSourceConnector) Description() string {
-	return "Token economy mode only: enable an optional tool source when the task needs it. Sources: skills, mcp, lsp, web_fetch, install_source, task, read_only_task. For mcp, pass the configured server name; omit name to list servers. Newly enabled tools are available on the next model request."
+	return "Token economy mode only: enable an optional tool source when the task needs it. Sources: skills, read_only_skill, mcp, lsp, web_fetch, install_source, task, read_only_task. For mcp, pass the configured server name; omit name to list servers. Newly enabled tools are available on the next model request."
 }
 
 func (*toolSourceConnector) ReadOnly() bool { return true }
@@ -93,7 +94,7 @@ func (*toolSourceConnector) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"source":{"type":"string","description":"Tool source to enable: skills, mcp, lsp, web_fetch, install_source, task, or read_only_task."},
+			"source":{"type":"string","description":"Tool source to enable: skills, read_only_skill, mcp, lsp, web_fetch, install_source, task, or read_only_task."},
 			"name":{"type":"string","description":"For source=mcp, the configured server name. Omit to list configured MCP servers without connecting them."}
 		},
 		"required":["source"]
@@ -123,6 +124,8 @@ func (t *toolSourceConnector) Execute(ctx context.Context, args json.RawMessage)
 	switch source {
 	case "skills":
 		return runSourceInstaller(ctx, "skills", t.skills)
+	case "read_only_skill":
+		return runSourceInstaller(ctx, "read_only_skill", t.readOnlySkill)
 	case "task":
 		return runSourceInstaller(ctx, "task", t.task)
 	case "read_only_task":
@@ -156,7 +159,7 @@ func planModeSourceBlocked(ctx context.Context, source string) (bool, string) {
 	if !agent.PlanModeFromContext(ctx) {
 		return false, ""
 	}
-	readOnlySource := source == "web_fetch" || source == "lsp" || source == "read_only_task"
+	readOnlySource := source == "web_fetch" || source == "lsp" || source == "read_only_task" || source == "read_only_skill"
 	decision := planmode.Policy{}.Decide(planmode.Call{Name: source, ReadOnly: readOnlySource})
 	return decision.Blocked, decision.Message
 }
@@ -165,6 +168,8 @@ func normalizeToolSource(source string) string {
 	switch strings.ToLower(strings.TrimSpace(source)) {
 	case "skill", "skills":
 		return "skills"
+	case "read_only_skill", "readonly_skill", "read-only-skill", "read_only_skills", "readonly_skills", "read-only-skills":
+		return "read_only_skill"
 	case "mcp", "plugin", "plugins", "server", "servers":
 		return "mcp"
 	case "lsp", "language_server", "language-servers":
@@ -186,6 +191,9 @@ func (t *toolSourceConnector) availableSources() []string {
 	var out []string
 	if t.skills != nil {
 		out = append(out, "skills")
+	}
+	if t.readOnlySkill != nil {
+		out = append(out, "read_only_skill")
 	}
 	if t.mcp != nil || len(t.mcpNames) > 0 {
 		out = append(out, "mcp")

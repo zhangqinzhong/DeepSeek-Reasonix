@@ -286,9 +286,9 @@ func (p Policy) Decide(toolName string, readOnly bool, args json.RawMessage) Dec
 - **Relationship to plan mode.** Plan mode (§3.4) is an orthogonal, coarser gate
   that refuses *all* writers regardless of policy; it is checked first. The
   permission layer is the fine-grained, always-on gate underneath it. Plan mode
-  still allows `read_only_task`, whose sub-agent receives only read-only research
-  tools and safe foreground bash; writer-capable `task` delegation remains
-  blocked.
+  still allows `read_only_task` and `read_only_skill`, whose sub-agents receive
+  only read-only research tools and safe foreground bash; writer-capable `task`
+  delegation and full skill execution remain blocked.
 - **User decisions are separate from tool approvals.** Runtime tool approval has
   three user-facing postures: `ask` ("需要批准"), `auto` ("自动批准"), and
   `yolo` ("Yolo批准"). `auto` lets the permission policy auto-approve the writer

@@ -122,9 +122,11 @@ func TestPlanModeDeniedToolsBlocked(t *testing.T) {
 }
 
 func TestPlanModeReadOnlyToolsAllowed(t *testing.T) {
-	blocked, _ := (&Agent{}).planModeBlocked("read_file", true, nil)
-	if blocked {
-		t.Error("ReadOnly tools should not be blocked in plan mode")
+	for _, name := range []string{"read_file", "read_only_skill"} {
+		blocked, _ := (&Agent{}).planModeBlocked(name, true, nil)
+		if blocked {
+			t.Errorf("ReadOnly tool %q should not be blocked in plan mode", name)
+		}
 	}
 }
 
