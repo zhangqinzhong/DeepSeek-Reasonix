@@ -160,12 +160,6 @@ function sendButton(): HTMLButtonElement {
   return node;
 }
 
-function removeAttachmentButton(): HTMLButtonElement {
-  const node = document.querySelector(".composer-context__remove") as HTMLButtonElement | null;
-  if (!node) throw new Error("attachment remove button did not render");
-  return node;
-}
-
 function contextItemCount(): number {
   return document.querySelectorAll(".composer-context__item").length;
 }
@@ -209,10 +203,12 @@ console.log("\ncomposer image capability");
     await flushTimers();
     await flushTimers();
   });
+  await waitFor(() => contextItemCount() === 1);
 
-  eq(saveCalls, 0, "text-only model rejects new image attachments before saving them");
-  ok(toastText().includes("does not support image input"), "blocked image attach shows a recoverable warning toast");
-  eq(document.querySelector(".composer__prompt") === null, true, "blocked image attach does not render inside the composer layout");
+  eq(saveCalls, 1, "text-only model stores pasted image attachments as tool-readable refs");
+  eq(contextItemCount(), 1, "text-only model keeps the pasted image attachment in the draft");
+  eq(toastText(), "", "text-only image attach does not warn before send");
+  eq(document.querySelector(".composer__prompt") === null, true, "image attach warning does not render inside the composer layout");
 
   await act(async () => {
     root.unmount();
@@ -248,22 +244,10 @@ console.log("\ncomposer image capability");
     await flushTimers();
   });
 
-  eq(sent.length, 0, "switching to a text-only model blocks send while image attachments remain");
-  ok(toastText().includes("does not support image input"), "blocked send shows the recoverable image-input warning toast");
+  eq(sent.length, 1, "switching to a text-only model still sends the image ref for tool use");
+  ok(toastText().includes("will not receive images directly"), "text-only send warns about direct image input without blocking");
   eq(document.querySelector(".composer__prompt") === null, true, "image-input warning does not render inside the composer layout");
-
-  await act(async () => {
-    removeAttachmentButton().click();
-    await flushTimers();
-  });
-
-  await rerender({ imageInputEnabled: true });
-  await act(async () => {
-    sendButton().click();
-    await flushTimers();
-  });
-
-  eq(sent.length, 1, "switching back to an image-capable model restores send");
+  ok(sent[0]?.submit?.includes("@.reasonix/attachments/mock.png") === true, "submitted text retains the local image attachment ref");
 
   await act(async () => {
     root.unmount();

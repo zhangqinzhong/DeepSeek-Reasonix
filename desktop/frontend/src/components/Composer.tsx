@@ -107,19 +107,6 @@ function attachmentExt(name: string): string {
   return dot >= 0 ? name.slice(dot + 1).toUpperCase() : "";
 }
 
-function isImageFilePath(path: string): boolean {
-  switch (path.toLowerCase().split(".").pop()) {
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "gif":
-    case "webp":
-      return true;
-    default:
-      return false;
-  }
-}
-
 function hasImageAttachments(items: Attachment[]): boolean {
   return items.some((attachment) => Boolean(attachment.previewUrl));
 }
@@ -1102,7 +1089,7 @@ export function Composer({
   const activeGoal = (goal ?? "").trim();
   const goalModeOn = collaborationMode === "goal";
   const tokenModeOn = tokenMode === "economy";
-  const rejectImageInput = useCallback((message = t("composer.imageInputUnsupported")) => {
+  const warnImageInputFallback = useCallback((message = t("composer.imageInputUnsupported")) => {
     showToast(message, "warn");
   }, [showToast, t]);
 
@@ -1112,8 +1099,7 @@ export function Composer({
     const trimmedText = text.trim();
     if (pendingPaste > 0) return;
     if (!imageInputEnabled && hasImageAttachments(attachmentsRef.current)) {
-      rejectImageInput();
-      return;
+      warnImageInputFallback();
     }
     if (!trimmedText && attachments.length === 0 && workspaceRefs.length === 0) {
       if (goalModeOn && !activeGoal) {
@@ -1164,10 +1150,6 @@ export function Composer({
   const attachImageFiles = async (files: File[], sourceDraftKey: string) => {
     const images = files.filter((f) => f.type.startsWith("image/"));
     if (images.length === 0) return;
-    if (!imageInputEnabled) {
-      rejectImageInput();
-      return;
-    }
     for (const file of images) {
       setPendingPaste((n) => n + 1);
       try {
@@ -1217,10 +1199,6 @@ export function Composer({
   };
 
   const attachNativeClipboardImage = async (notifyOnError: boolean, sourceDraftKey: string) => {
-    if (!imageInputEnabled) {
-      rejectImageInput();
-      return;
-    }
     setPendingPaste((n) => n + 1);
     try {
       const path = await app.SaveClipboardImage();
@@ -1242,10 +1220,6 @@ export function Composer({
   const attachDroppedPaths = async (paths: string[], sourceDraftKey = activeDraftKeyRef.current) => {
     setDragOver(false);
     for (const path of paths) {
-      if (!imageInputEnabled && isImageFilePath(path)) {
-        rejectImageInput();
-        continue;
-      }
       setPendingPaste((n) => n + 1);
       try {
         const key = { hash: "", source: `path:${path}` };

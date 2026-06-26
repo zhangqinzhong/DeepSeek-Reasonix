@@ -1640,36 +1640,49 @@ func TestFoldedPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
 	}
 }
 
-func TestTextOnlyModelBlocksSendingPastedImageRefs(t *testing.T) {
+func TestTextOnlyModelSendsPastedImageRefsForToolUse(t *testing.T) {
 	workspace := t.TempDir()
 	writeTUIImageCapabilityConfig(t, workspace)
 	path := saveTestImageAttachment(t, workspace)
 
 	runner := &recordingTurnRunner{}
+	events := make(chan event.Event, 8)
 	m := newTestChatTUI()
 	m.ctrl = control.New(control.Options{
-		Runner:        runner,
-		Sink:          event.Discard,
+		Runner: runner,
+		Sink: event.FuncSink(func(e event.Event) {
+			events <- e
+		}),
 		WorkspaceRoot: workspace,
 		ModelRef:      "custom/text-only",
 	})
 	m.pastedBlocks = []pastedBlock{{label: "[image #1]", text: "@" + path, image: true}}
 	m.input.SetValue("describe [image #1] please")
 
-	model, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = model.(chatTUI)
+	if cmd == nil {
+		t.Fatal("text-only image ref send should resolve refs before starting the turn")
+	}
+	msg := cmd()
+	if _, ok := msg.(refsResolvedMsg); !ok {
+		t.Fatalf("enter cmd = %T, want refsResolvedMsg", msg)
+	}
+	model, _ = m.Update(msg)
+	m = model.(chatTUI)
+	waitForCLIEvent(t, events, event.TurnDone)
 
-	if len(runner.inputs) != 0 {
-		t.Fatalf("text-only model should not start a turn, inputs=%q", runner.inputs)
+	if len(runner.inputs) != 1 {
+		t.Fatalf("text-only model should send the image ref for tool use, inputs=%q", runner.inputs)
 	}
-	if got := m.input.Value(); got != "describe [image #1] please" {
-		t.Fatalf("blocked send should keep the image token in place, got %q", got)
+	if !strings.Contains(runner.inputs[0], "@"+path) {
+		t.Fatalf("runner input should retain the image ref context, got %q", runner.inputs[0])
 	}
-	if len(m.pastedBlocks) != 1 || m.pastedBlocks[0].text != "@"+path {
-		t.Fatalf("blocked send should keep pasted image refs, got %#v", m.pastedBlocks)
+	if !strings.Contains(runner.inputs[0], "OCR/image/vision tool") {
+		t.Fatalf("runner input should mention tool-based image handling, got %q", runner.inputs[0])
 	}
-	if got := strings.Join(m.transcript, "\n"); !strings.Contains(got, "does not support image input") {
-		t.Fatalf("blocked send should show an image capability warning, transcript=%q", got)
+	if got := strings.Join(m.transcript, "\n"); strings.Contains(got, "will not receive images directly") {
+		t.Fatalf("text-only model should not block image refs that tools can read, transcript=%q", got)
 	}
 }
 
@@ -1711,7 +1724,7 @@ func TestVisionModelAllowsSendingPastedImageRefs(t *testing.T) {
 	if !strings.Contains(runner.inputs[0], "@"+path) {
 		t.Fatalf("runner input should retain the image ref context, got %q", runner.inputs[0])
 	}
-	if got := strings.Join(m.transcript, "\n"); strings.Contains(got, "does not support image input") {
+	if got := strings.Join(m.transcript, "\n"); strings.Contains(got, "will not receive images directly") {
 		t.Fatalf("vision-capable model should not warn about image input, transcript=%q", got)
 	}
 }
