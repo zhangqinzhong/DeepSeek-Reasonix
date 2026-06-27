@@ -14,8 +14,12 @@ import (
 func init() { tool.RegisterBuiltin(listDir{}) }
 
 // listDir lists a directory. workDir, when non-empty, is the directory a
-// relative path resolves against (see resolveIn).
-type listDir struct{ workDir string }
+// relative path resolves against (see resolveIn). paths resolves session-scoped
+// read aliases for external folder refs.
+type listDir struct {
+	workDir string
+	paths   *PathResolver
+}
 
 func (listDir) Name() string { return "ls" }
 
@@ -42,16 +46,20 @@ func (l listDir) Execute(ctx context.Context, args json.RawMessage) (string, err
 	if p.Path == "" {
 		p.Path = "."
 	}
-	p.Path = resolveIn(l.workDir, p.Path)
+	rp := resolveReadablePath(l.workDir, p.Path, l.paths)
+	p.Path = rp.Path
 
 	// Recursive mode: walk the whole tree depth-first.
 	if p.Recursive {
-		return l.listRecursive(p.Path)
+		return l.listRecursive(p.Path, rp)
 	}
 
 	entries, err := os.ReadDir(p.Path)
 	if err != nil {
-		return "", fmt.Errorf("ls %s: %w", p.Path, err)
+		if rp.External {
+			return "", fmt.Errorf("ls %s: %s", rp.DisplayPath, rp.ErrorText(err))
+		}
+		return "", fmt.Errorf("ls %s: %w", rp.DisplayPath, err)
 	}
 
 	var b strings.Builder
@@ -74,7 +82,7 @@ func (l listDir) Execute(ctx context.Context, args json.RawMessage) (string, err
 
 // listRecursive walks a directory tree depth-first, skipping noise dirs.
 // Depth is capped to guard against symlink loops.
-func (l listDir) listRecursive(root string) (string, error) {
+func (l listDir) listRecursive(root string, rp ResolvedPath) (string, error) {
 	var b strings.Builder
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, wErr error) error {
 		if wErr != nil {
@@ -110,7 +118,10 @@ func (l listDir) listRecursive(root string) (string, error) {
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("ls -R %s: %w", root, err)
+		if rp.External {
+			return "", fmt.Errorf("ls -R %s: %s", rp.DisplayPath, rp.ErrorText(err))
+		}
+		return "", fmt.Errorf("ls -R %s: %w", rp.DisplayPath, err)
 	}
 	if b.Len() == 0 {
 		return "(empty directory tree)", nil

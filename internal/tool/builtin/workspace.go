@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"reasonix/internal/netclient"
@@ -27,6 +29,7 @@ type Workspace struct {
 	BashTimeout time.Duration
 	Search      SearchSpec
 	ProxySpec   netclient.ProxySpec
+	ReadPaths   *PathResolver
 }
 
 // Tools returns the built-in tools bound to the workspace, ready to Add to a
@@ -42,7 +45,7 @@ func (w Workspace) Tools(enabled ...string) []tool.Tool {
 	roots := realRoots(writeRoots)
 
 	overrides := map[string]tool.Tool{
-		"read_file":     readFile{workDir: w.Dir},
+		"read_file":     readFile{workDir: w.Dir, paths: w.ReadPaths},
 		"write_file":    writeFile{workDir: w.Dir, roots: roots},
 		"edit_file":     editFile{workDir: w.Dir, roots: roots},
 		"multi_edit":    multiEdit{workDir: w.Dir, roots: roots},
@@ -52,9 +55,9 @@ func (w Workspace) Tools(enabled ...string) []tool.Tool {
 		"delete_symbol": deleteSymbol{workDir: w.Dir, roots: roots},
 		"code_index":    codeIndex{workDir: w.Dir},
 		"bash":          bash{workDir: w.Dir, sb: w.Bash, timeout: w.BashTimeout},
-		"ls":            listDir{workDir: w.Dir},
-		"glob":          globTool{workDir: w.Dir},
-		"grep":          grepTool{workDir: w.Dir, rg: w.Search.RgPath},
+		"ls":            listDir{workDir: w.Dir, paths: w.ReadPaths},
+		"glob":          globTool{workDir: w.Dir, paths: w.ReadPaths},
+		"grep":          grepTool{workDir: w.Dir, paths: w.ReadPaths, rg: w.Search.RgPath},
 		"web_fetch":     webFetch{proxySpec: w.ProxySpec},
 	}
 	all := tool.Builtins()
@@ -100,6 +103,139 @@ func resolveIn(workDir, p string) string {
 		return p
 	}
 	return filepath.Join(workDir, p)
+}
+
+// PathResolver maps session-authorized token paths to local read-only roots.
+// It is intentionally used only by read tools; write tools continue to rely on
+// WriteRoots confinement and never resolve these aliases.
+type PathResolver struct {
+	mu    sync.RWMutex
+	roots map[string]string
+}
+
+// NewPathResolver returns a resolver whose root set can be updated after the
+// workspace tools have been registered.
+func NewPathResolver() *PathResolver {
+	return &PathResolver{roots: map[string]string{}}
+}
+
+// RegisterReadRoot authorizes token and all of its local subpaths to resolve
+// under root for read-only tools in this session.
+func (r *PathResolver) RegisterReadRoot(token, root string) {
+	if r == nil {
+		return
+	}
+	token = normalizeReadToken(token)
+	root = filepath.Clean(strings.TrimSpace(root))
+	if token == "" || root == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.roots == nil {
+		r.roots = map[string]string{}
+	}
+	r.roots[token] = root
+}
+
+// Resolve maps a submitted path or pattern to a local path when it begins with
+// a registered token. ok is false for ordinary workspace paths.
+func (r *PathResolver) Resolve(path string) (ResolvedPath, bool) {
+	if r == nil {
+		return ResolvedPath{}, false
+	}
+	key := normalizeReadToken(path)
+	if key == "" {
+		return ResolvedPath{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if root, ok := r.roots[key]; ok {
+		return ResolvedPath{Path: root, DisplayPath: key, Root: root, DisplayRoot: key, External: true}, true
+	}
+	for token, root := range r.roots {
+		if !strings.HasPrefix(key, token+"/") {
+			continue
+		}
+		sub, ok := cleanReadSubpath(strings.TrimPrefix(key, token+"/"))
+		if !ok {
+			return ResolvedPath{}, false
+		}
+		return ResolvedPath{
+			Path:        filepath.Join(root, filepath.FromSlash(sub)),
+			DisplayPath: token + "/" + sub,
+			Root:        root,
+			DisplayRoot: token,
+			External:    true,
+		}, true
+	}
+	return ResolvedPath{}, false
+}
+
+// ResolvedPath carries both the local path used for I/O and the token path that
+// should appear in tool output.
+type ResolvedPath struct {
+	Path        string
+	DisplayPath string
+	Root        string
+	DisplayRoot string
+	External    bool
+}
+
+func (p ResolvedPath) DisplayFor(path string) string {
+	if !p.External {
+		return path
+	}
+	rel, err := filepath.Rel(p.Root, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return path
+	}
+	if rel == "." {
+		return p.DisplayRoot
+	}
+	return filepath.ToSlash(filepath.Join(p.DisplayRoot, rel))
+}
+
+func (p ResolvedPath) ErrorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if !p.External {
+		return msg
+	}
+	return strings.ReplaceAll(msg, p.Root, p.DisplayRoot)
+}
+
+func resolveReadablePath(workDir, path string, resolver *PathResolver) ResolvedPath {
+	if rp, ok := resolver.Resolve(path); ok {
+		return rp
+	}
+	p := resolveIn(workDir, path)
+	return ResolvedPath{Path: p, DisplayPath: p, Root: p, DisplayRoot: p}
+}
+
+func normalizeReadToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.TrimPrefix(token, "@")
+	token = filepath.ToSlash(token)
+	token = strings.TrimRight(token, "/")
+	return token
+}
+
+func cleanReadSubpath(sub string) (string, bool) {
+	sub = strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(sub)), "/")
+	if sub == "" || sub == "." {
+		return ".", true
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(sub))
+	if cleaned == "." {
+		return ".", true
+	}
+	if !filepath.IsLocal(cleaned) {
+		return "", false
+	}
+	return filepath.ToSlash(cleaned), true
 }
 
 // vendorDirs are directory names grep and glob skip during a recursive walk:

@@ -592,10 +592,14 @@ func TestRegisterExternalFolderRefResolvesScopedDir(t *testing.T) {
 	}
 	expectedDisplayPath := filepath.ToSlash(expectedExternal)
 
-	c := &Controller{workspaceRoot: workspace}
+	registrar := &recordingExternalFolderToolRefs{}
+	c := &Controller{workspaceRoot: workspace, externalFolderToolRefs: registrar}
 	token, displayPath, err := c.RegisterExternalFolderRef(external)
 	if err != nil {
 		t.Fatalf("RegisterExternalFolderRef: %v", err)
+	}
+	if registrar.token != token || registrar.root != expectedExternal {
+		t.Fatalf("tool read root registration = (%q, %q), want (%q, %q)", registrar.token, registrar.root, token, expectedExternal)
 	}
 	if strings.ContainsAny(token, " \t\r\n") {
 		t.Fatalf("external folder token must be whitespace-free, got %q", token)
@@ -636,6 +640,16 @@ func TestRegisterExternalFolderRefResolvesScopedDir(t *testing.T) {
 	if block != "" || len(errs) != 0 {
 		t.Fatalf("external folder ref must not resolve escaping subpaths, block=%q errs=%v", block, errs)
 	}
+}
+
+type recordingExternalFolderToolRefs struct {
+	token string
+	root  string
+}
+
+func (r *recordingExternalFolderToolRefs) RegisterReadRoot(token, root string) {
+	r.token = token
+	r.root = root
 }
 
 func TestExternalFolderRefListAndSearch(t *testing.T) {

@@ -142,6 +142,9 @@ func (c *Controller) RegisterExternalFolderRef(path string) (token, displayPath 
 	}
 	c.externalFolderRefs[token] = abs
 	c.externalFolderRefsMu.Unlock()
+	if c.externalFolderToolRefs != nil {
+		c.externalFolderToolRefs.RegisterReadRoot(token, abs)
+	}
 	return token, filepath.ToSlash(abs), nil
 }
 

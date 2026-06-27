@@ -15,8 +15,12 @@ import (
 func init() { tool.RegisterBuiltin(globTool{}) }
 
 // globTool matches files by pattern. workDir, when non-empty, is the directory
-// a relative pattern resolves against (see resolveIn).
-type globTool struct{ workDir string }
+// a relative pattern resolves against (see resolveIn). paths resolves
+// session-scoped read aliases for external folder refs.
+type globTool struct {
+	workDir string
+	paths   *PathResolver
+}
 
 func (globTool) Name() string { return "glob" }
 
@@ -46,12 +50,14 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 	// simple-filename recursive-fallback check below works on the raw input
 	// — not the already-joined absolute path that always contains separators.
 	rawPattern := p.Pattern
-	p.Pattern = resolveIn(g.workDir, p.Pattern)
+	rp := resolveReadablePath(g.workDir, p.Pattern, g.paths)
+	p.Pattern = rp.Path
 	p.Pattern = filepath.FromSlash(p.Pattern) // models emit "/" (see Description); WalkDir/Match compare OS-native paths
+	displayPattern := rp.DisplayPath
 
 	// If the pattern contains **, use recursive matching via filepath.WalkDir.
 	if strings.Contains(p.Pattern, "**") {
-		return globRecursive(ctx, p.Pattern)
+		return globRecursive(ctx, p.Pattern, displayPattern, rp)
 	}
 
 	// For patterns without **, try filepath.Glob first. If no matches are
@@ -62,14 +68,19 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 	// resolveIn) so a workspace root doesn't mask a simple "*.go".
 	matches, err := filepath.Glob(p.Pattern)
 	if err != nil {
-		return "", fmt.Errorf("glob %q: %w", p.Pattern, err)
+		if rp.External {
+			return "", fmt.Errorf("glob %q: %s", displayPattern, rp.ErrorText(err))
+		}
+		return "", fmt.Errorf("glob %q: %w", displayPattern, err)
 	}
 	if len(matches) == 0 && !strings.ContainsAny(rawPattern, "/\\") {
-		return globRecursive(ctx, filepath.Join(g.workDir, "**", rawPattern))
+		fallback := filepath.Join(g.workDir, "**", rawPattern)
+		return globRecursive(ctx, fallback, fallback, ResolvedPath{})
 	}
 	if len(matches) == 0 {
 		return "(no matches)", nil
 	}
+	matches = displayGlobMatches(matches, rp)
 	if len(matches) > globMaxResults {
 		matches = matches[:globMaxResults]
 		return strings.Join(matches, "\n") + fmt.Sprintf("\n... (truncated at %d results)", globMaxResults), nil
@@ -81,7 +92,7 @@ func (g globTool) Execute(ctx context.Context, args json.RawMessage) (string, er
 // It splits the pattern at ** to get a root prefix and a suffix to match
 // against each file path found during the walk. Accepts a context so the
 // walk can be interrupted on cancellation.
-func globRecursive(ctx context.Context, pattern string) (string, error) {
+func globRecursive(ctx context.Context, pattern, displayPattern string, rp ResolvedPath) (string, error) {
 	// Split on ** to find the root directory and the remaining pattern.
 	parts := strings.SplitN(pattern, "**", 2)
 	root := parts[0]
@@ -95,7 +106,10 @@ func globRecursive(ctx context.Context, pattern string) (string, error) {
 
 	// Check root exists.
 	if info, err := os.Stat(root); err != nil {
-		return "", fmt.Errorf("glob %q: %w", pattern, err)
+		if rp.External {
+			return "", fmt.Errorf("glob %q: %s", displayPattern, rp.ErrorText(err))
+		}
+		return "", fmt.Errorf("glob %q: %w", displayPattern, err)
 	} else if !info.IsDir() {
 		return "(no matches)", nil
 	}
@@ -142,18 +156,33 @@ func globRecursive(ctx context.Context, pattern string) (string, error) {
 		return nil
 	})
 	if err != nil {
-		return "", fmt.Errorf("glob %q: %w", pattern, err)
+		if rp.External {
+			return "", fmt.Errorf("glob %q: %s", displayPattern, rp.ErrorText(err))
+		}
+		return "", fmt.Errorf("glob %q: %w", displayPattern, err)
 	}
 
 	if len(matches) == 0 {
 		return "(no matches)", nil
 	}
 	sort.Strings(matches)
+	matches = displayGlobMatches(matches, rp)
 	result := strings.Join(matches, "\n")
 	if truncated {
 		result += fmt.Sprintf("\n... (truncated at %d results)", globMaxResults)
 	}
 	return result, nil
+}
+
+func displayGlobMatches(matches []string, rp ResolvedPath) []string {
+	if !rp.External {
+		return matches
+	}
+	out := make([]string, len(matches))
+	for i, m := range matches {
+		out[i] = rp.DisplayFor(m)
+	}
+	return out
 }
 
 // matchGlobSuffix checks if path matches the suffix pattern after **.
