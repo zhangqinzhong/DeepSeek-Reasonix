@@ -77,6 +77,30 @@ Do not put API key values in `config.toml`. This file is regular configuration:
 it is safe to inspect, edit, migrate, and include in diagnostics after standard
 redaction. Secrets belong in the global `.env` below.
 
+### Custom provider `api_key_env` names
+
+When a custom provider is added from the desktop settings or `reasonix setup`,
+Reasonix stores a generated `api_key_env` in `config.toml` and writes the secret
+value to the matching key in the global `.env`. The generated name is stable, so
+the same provider keeps using the same credential slot after restart.
+
+Desktop settings derive the default from the provider name. Names that normalize
+to ASCII keep readable env names such as `LOCAL_GATEWAY_API_KEY`; names made
+entirely of non-ASCII characters get a stable hash suffix such as
+`CUSTOM_d39b9067_API_KEY` so two Chinese provider names do not share
+`CUSTOM_API_KEY`.
+
+The CLI custom-provider wizard derives its default from the base URL, for
+example `https://token.sensenova.cn/v1` becomes
+`CUSTOM_TOKEN_SENSENOVA_CN_API_KEY`. Press Enter to accept that default, or type
+an explicit env name such as `CUSTOM_API_KEY` if you intentionally want to share
+one credential across providers.
+
+Existing configs are not rewritten on upgrade. If an old custom provider already
+uses `CUSTOM_API_KEY`, it will keep working with that key. If several old custom
+providers accidentally share `CUSTOM_API_KEY`, edit each provider's
+`api_key_env` to a distinct name and save the corresponding API key again.
+
 ## Global `.env`
 
 `<Reasonix home>/.env` is the single runtime source for provider API keys saved

@@ -1182,6 +1182,75 @@ func TestProviderSlug(t *testing.T) {
 			t.Errorf("fallback slug = %q, want 8 hex chars after prefix", got)
 		}
 	})
+
+	t.Run("sha1 fallback for non-ascii host", func(t *testing.T) {
+		got := providerSlug("custom", "https://例子.测试/v1")
+		if !strings.HasPrefix(got, "custom-") || got == "custom-" {
+			t.Errorf("fallback slug = %q, want custom-<hex>", got)
+		}
+		if len(got) != len("custom-")+8 {
+			t.Errorf("fallback slug = %q, want 8 hex chars after prefix", got)
+		}
+	})
+}
+
+func TestCustomProviderAPIKeyEnv(t *testing.T) {
+	cases := []struct {
+		name, baseURL, want string
+	}{
+		{"standard host", "https://token.sensenova.cn/v1", "CUSTOM_TOKEN_SENSENOVA_CN_API_KEY"},
+		{"localhost with port", "http://localhost:11434/v1", "CUSTOM_LOCALHOST_11434_API_KEY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := customProviderAPIKeyEnv(tc.baseURL); got != tc.want {
+				t.Errorf("customProviderAPIKeyEnv(%q) = %q, want %q", tc.baseURL, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("non-ascii host does not collapse to shared custom key", func(t *testing.T) {
+		got := customProviderAPIKeyEnv("https://例子.测试/v1")
+		if got == "CUSTOM_API_KEY" || !strings.HasPrefix(got, "CUSTOM_") || !strings.HasSuffix(got, "_API_KEY") {
+			t.Errorf("customProviderAPIKeyEnv(non-ascii) = %q, want stable CUSTOM_<hash>_API_KEY", got)
+		}
+	})
+}
+
+func TestPromptCustomProviderManualDefaultsKeyEnvFromBaseURL(t *testing.T) {
+	entries, err := promptCustomProviderManualWith(
+		bufio.NewScanner(strings.NewReader("\n\nsensenova-chat\n")),
+		"https://token.sensenova.cn/v1",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("promptCustomProviderManualWith: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if got, want := entries[0].APIKeyEnv, "CUSTOM_TOKEN_SENSENOVA_CN_API_KEY"; got != want {
+		t.Errorf("APIKeyEnv = %q, want %q", got, want)
+	}
+}
+
+func TestPromptCustomProviderManualPreservesExplicitKeyEnv(t *testing.T) {
+	entries, err := promptCustomProviderManualWith(
+		bufio.NewScanner(strings.NewReader("\nmanual-chat\n")),
+		"https://token.sensenova.cn/v1",
+		"CUSTOM_API_KEY",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("promptCustomProviderManualWith: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if got := entries[0].APIKeyEnv; got != "CUSTOM_API_KEY" {
+		t.Errorf("APIKeyEnv = %q, want explicit CUSTOM_API_KEY", got)
+	}
 }
 
 // TestFilterStaleCustomEntries covers the wizard's auto-cleanup of legacy

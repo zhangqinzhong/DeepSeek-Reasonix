@@ -1274,7 +1274,29 @@ func providerSlug(kind, baseURL string) string {
 			}
 		}
 	}
-	return kind + "-" + strings.TrimRight(b.String(), "-")
+	slug := strings.TrimRight(b.String(), "-")
+	if slug == "" {
+		sum := sha1.Sum([]byte(baseURL))
+		return kind + "-" + hex.EncodeToString(sum[:4])
+	}
+	return kind + "-" + slug
+}
+
+func customProviderAPIKeyEnv(baseURL string) string {
+	stem := strings.ToUpper(providerSlug("custom", baseURL))
+	stem = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '_'
+		}
+	}, stem)
+	stem = strings.Trim(stem, "_")
+	if stem == "" {
+		return "CUSTOM_API_KEY"
+	}
+	return stem + "_API_KEY"
 }
 
 // providerFamily is a wizard-only grouping of provider SKUs by vendor; it does
@@ -1329,7 +1351,7 @@ func promptCustomProviderManualWith(in *bufio.Scanner, baseURL, keyEnv, apiKey s
 		}
 	}
 	if keyEnv == "" {
-		keyEnv = ask(in, os.Stdout, i18n.M.CustomPromptKeyEnv, "CUSTOM_API_KEY")
+		keyEnv = ask(in, os.Stdout, i18n.M.CustomPromptKeyEnv, customProviderAPIKeyEnv(baseURL))
 	}
 	if apiKey == "" {
 		apiKey = ask(in, os.Stdout, i18n.M.CustomPromptAPIKey, "")
@@ -1361,7 +1383,7 @@ func promptCustomProviderFromURL() ([]config.ProviderEntry, error) {
 	if baseURL == "" {
 		return nil, fmt.Errorf("base URL is required")
 	}
-	keyEnv := ask(in, os.Stdout, i18n.M.CustomPromptKeyEnv, "CUSTOM_API_KEY")
+	keyEnv := ask(in, os.Stdout, i18n.M.CustomPromptKeyEnv, customProviderAPIKeyEnv(baseURL))
 	apiKey := ask(in, os.Stdout, i18n.M.CustomPromptAPIKey, "")
 	if apiKey != "" {
 		os.Setenv(keyEnv, apiKey)
