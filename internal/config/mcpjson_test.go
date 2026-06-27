@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,13 +72,28 @@ func TestMCPJSONTrustedReadOnlyToolsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMCPJSONCallTimeoutSecondsRoundTrip(t *testing.T) {
+func TestMCPJSONCallTimeoutsRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, mcpJSONFile)
+	if err := os.WriteFile(path, []byte(`{
+  "mcpServers": {
+    "maker": {
+      "command": "old-maker",
+      "unknown_field": true
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := UpsertMCPJSONPlugin(path, PluginEntry{
 		Name:               "maker",
 		Command:            "maker-mcp",
 		CallTimeoutSeconds: 600,
+		ToolTimeoutSeconds: map[string]int{
+			"generate/video": 1800,
+			"search":         120,
+			"ignored_zero":   0,
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -90,6 +106,27 @@ func TestMCPJSONCallTimeoutSecondsRoundTrip(t *testing.T) {
 	}
 	if got[0].CallTimeoutSeconds != 600 {
 		t.Fatalf("call_timeout_seconds = %d, want 600", got[0].CallTimeoutSeconds)
+	}
+	if got[0].ToolTimeoutSeconds["generate/video"] != 1800 || got[0].ToolTimeoutSeconds["search"] != 120 {
+		t.Fatalf("tool_timeout_seconds = %+v, want generate/video=1800 search=120", got[0].ToolTimeoutSeconds)
+	}
+	if _, ok := got[0].ToolTimeoutSeconds["ignored_zero"]; ok {
+		t.Fatalf("zero timeout should not be written: %+v", got[0].ToolTimeoutSeconds)
+	}
+
+	root, servers, err := readMCPJSONRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(root) == 0 || len(servers) != 1 {
+		t.Fatalf("raw root/servers = %+v/%+v", root, servers)
+	}
+	var server map[string]any
+	if err := json.Unmarshal(servers["maker"], &server); err != nil {
+		t.Fatal(err)
+	}
+	if server["unknown_field"] != true {
+		t.Fatalf("unknown per-server field was not preserved: %+v", server)
 	}
 }
 

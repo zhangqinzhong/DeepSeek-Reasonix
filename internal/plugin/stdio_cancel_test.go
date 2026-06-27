@@ -2,8 +2,6 @@ package plugin
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 	"time"
 )
@@ -44,56 +42,11 @@ func TestStdioCallReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
-func TestStdioCallTimesOutWithoutDeadline(t *testing.T) {
-	tr := &stdioTransport{
-		name:        "slow-server",
-		stdin:       discardWriteCloser{},
-		pending:     map[int]chan rpcResponse{},
-		callTimeout: 100 * time.Millisecond,
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := tr.call(context.Background(), "tools/call", map[string]any{})
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("timed-out call returned nil error")
-		}
-		if !strings.Contains(err.Error(), "context deadline exceeded") {
-			t.Fatalf("expected deadline exceeded error, got: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("stdio call did not return within 2s")
-	}
-}
-
-func TestNewStdioTransportUsesSpecCallTimeout(t *testing.T) {
-	tr, err := newStdioTransport(context.Background(), Spec{
-		Name:        "server",
-		Command:     os.Args[0],
-		Args:        []string{"-test.run=TestHelperProcess", "--"},
-		Env:         map[string]string{"GO_WANT_HELPER_PROCESS": "1"},
-		CallTimeout: 2 * time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("newStdioTransport: %v", err)
-	}
-	defer tr.close()
-	if tr.callTimeout != 2*time.Minute {
-		t.Fatalf("callTimeout = %v, want 2m", tr.callTimeout)
-	}
-}
-
 func TestStdioCallRespectsExistingDeadline(t *testing.T) {
 	tr := &stdioTransport{
-		name:        "server",
-		stdin:       discardWriteCloser{},
-		pending:     map[int]chan rpcResponse{},
-		callTimeout: 10 * time.Second,
+		name:    "server",
+		stdin:   discardWriteCloser{},
+		pending: map[int]chan rpcResponse{},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -114,12 +67,11 @@ func TestStdioCallRespectsExistingDeadline(t *testing.T) {
 	}
 }
 
-func TestStdioCallCancelOverridesTimeout(t *testing.T) {
+func TestStdioCallCancelReturnsContextCanceled(t *testing.T) {
 	tr := &stdioTransport{
-		name:        "slow-server",
-		stdin:       discardWriteCloser{},
-		pending:     map[int]chan rpcResponse{},
-		callTimeout: 500 * time.Millisecond,
+		name:    "slow-server",
+		stdin:   discardWriteCloser{},
+		pending: map[int]chan rpcResponse{},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

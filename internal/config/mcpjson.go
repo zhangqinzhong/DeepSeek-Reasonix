@@ -21,7 +21,7 @@ const mcpJSONFile = ".mcp.json"
 // mcpServerSpec mirrors one entry of Claude Code's "mcpServers" map. The field
 // names and semantics match PluginEntry: command/args/env describe a local
 // stdio server; type/url/headers describe a remote one. Reasonix also accepts
-// call_timeout_seconds as a stdio-specific extension.
+// timeout fields as MCP call policy extensions.
 type mcpServerSpec struct {
 	Type                 string            `json:"type"`
 	Command              string            `json:"command"`
@@ -30,6 +30,7 @@ type mcpServerSpec struct {
 	URL                  string            `json:"url"`
 	Headers              map[string]string `json:"headers"`
 	CallTimeoutSeconds   int               `json:"call_timeout_seconds"`
+	ToolTimeoutSeconds   map[string]int    `json:"tool_timeout_seconds"`
 	TrustedReadOnlyTools []string          `json:"trusted_read_only_tools"`
 	AutoStart            *bool             `json:"auto_start"`
 }
@@ -197,6 +198,7 @@ func pluginEntryFromMCPSpec(name string, s mcpServerSpec) PluginEntry {
 		URL:                  s.URL,
 		Headers:              s.Headers,
 		CallTimeoutSeconds:   s.CallTimeoutSeconds,
+		ToolTimeoutSeconds:   s.ToolTimeoutSeconds,
 		TrustedReadOnlyTools: s.TrustedReadOnlyTools,
 		AutoStart:            s.AutoStart,
 	}
@@ -338,6 +340,7 @@ func applyPluginEntryToMCPJSONServer(server map[string]json.RawMessage, entry Pl
 		delete(server, "args")
 	}
 	setMCPJSONInt(server, "call_timeout_seconds", entry.CallTimeoutSeconds)
+	setMCPJSONIntMap(server, "tool_timeout_seconds", entry.ToolTimeoutSeconds)
 	setMCPJSONStringArray(server, "trusted_read_only_tools", entry.TrustedReadOnlyTools)
 	setMCPJSONBool(server, "auto_start", entry.AutoStart)
 }
@@ -452,6 +455,27 @@ func setMCPJSONInt(server map[string]json.RawMessage, key string, value int) {
 	}
 	raw, err := json.Marshal(value)
 	if err != nil {
+		delete(server, key)
+		return
+	}
+	server[key] = raw
+}
+
+func setMCPJSONIntMap(server map[string]json.RawMessage, key string, values map[string]int) {
+	clean := make(map[string]int, len(values))
+	for k, v := range values {
+		if strings.TrimSpace(k) == "" || v <= 0 {
+			continue
+		}
+		clean[k] = v
+	}
+	if len(clean) == 0 {
+		delete(server, key)
+		return
+	}
+	raw, err := json.Marshal(clean)
+	if err != nil {
+		delete(server, key)
 		return
 	}
 	server[key] = raw
