@@ -296,6 +296,7 @@ export interface HistoryMessage {
   role: string;
   content: string;
   submitText?: string;
+  checkpointTurn?: number;
   createdAt?: number;
   reasoning?: string;
   memoryCitations?: MemoryCitation[];
@@ -408,6 +409,7 @@ export interface Meta {
   workspaceName?: string;
   workspacePath?: string;
   gitBranch?: string;
+  imageInputEnabled?: boolean;
   autoApproveTools?: boolean;
   bypass?: boolean; // legacy JSON key for YOLO/full-access tool auto-approval
   collaborationMode?: CollaborationMode;

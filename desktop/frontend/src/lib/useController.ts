@@ -44,7 +44,7 @@ export type MessageActionState = { turn: number; scope: MessageActionScope };
 export type HydrateReason = "switch-tab" | "new-session" | "resume-session" | "open-topic" | "startup";
 
 export type Item =
-  | { kind: "user"; id: string; text: string; submitText?: string; failed?: boolean; createdAt?: number }
+  | { kind: "user"; id: string; text: string; submitText?: string; failed?: boolean; createdAt?: number; checkpointTurn?: number }
   | { kind: "assistant"; id: string; text: string; reasoning: string; streaming: boolean; reasoningComplete?: boolean; memoryCitations?: MemoryCitation[] }
   | { kind: "phase"; id: string; text: string }
   | { kind: "notice"; id: string; level: "info" | "warn"; text: string }
@@ -214,6 +214,7 @@ export function sameMeta(a?: Meta, b?: Meta): boolean {
     a.workspaceName === b.workspaceName &&
     a.workspacePath === b.workspacePath &&
     a.gitBranch === b.gitBranch &&
+    a.imageInputEnabled === b.imageInputEnabled &&
     a.autoApproveTools === b.autoApproveTools &&
     a.bypass === b.bypass &&
     a.collaborationMode === b.collaborationMode &&
@@ -321,6 +322,7 @@ type Action =
   | { type: "message_action_start"; action: MessageActionState }
   | { type: "message_action_done" }
   | { type: "history"; messages: HistoryMessage[] }
+  | { type: "history_checkpoint_turns"; messages: HistoryMessage[] }
   | { type: "local_notice"; level: "info" | "warn"; text: string }
   | { type: "clearApproval" }
   | { type: "clearAsk" }
@@ -373,7 +375,7 @@ export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: str
     }
     if (m.role === "user") {
       if (m.content.trim() === "") continue;
-      items.push({ kind: "user", id: `${idPrefix}${seq}`, text: m.content, submitText: m.submitText, createdAt: m.createdAt });
+      items.push({ kind: "user", id: `${idPrefix}${seq}`, text: m.content, submitText: m.submitText, createdAt: m.createdAt, checkpointTurn: m.checkpointTurn });
       seq++;
       continue;
     }
@@ -441,6 +443,24 @@ export function historyMessagesToItems(messages: HistoryMessage[], idPrefix: str
     }
   }
   return { items, seq };
+}
+
+function mergeHistoryCheckpointTurns(items: Item[], messages: HistoryMessage[]): Item[] {
+  const turns = messages
+    .filter((m) => m.role === "user" && m.content.trim() !== "")
+    .map((m) => m.checkpointTurn);
+  if (!turns.some((turn) => turn != null)) return items;
+  let userIndex = 0;
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.kind !== "user") return item;
+    const turn = turns[userIndex];
+    userIndex += 1;
+    if (turn == null || item.checkpointTurn === turn) return item;
+    changed = true;
+    return { ...item, checkpointTurn: turn };
+  });
+  return changed ? next : items;
 }
 
 function positionalToolResults(messages: HistoryMessage[]): Map<string, { message: HistoryMessage; index: number }> {
@@ -551,6 +571,19 @@ function applyEvent(s: State, e: WireEvent): State {
       return { ...s, items, live, currentAssistant: id, seq };
     }
     case "message": {
+      const existingAssistant =
+        s.currentAssistant === undefined
+          ? undefined
+          : s.items.find((it): it is Extract<Item, { kind: "assistant" }> => it.kind === "assistant" && it.id === s.currentAssistant);
+      const text = e.text ?? s.live?.text ?? existingAssistant?.text ?? "";
+      const reasoning = e.reasoning ?? s.live?.reasoning ?? existingAssistant?.reasoning ?? "";
+      if (text.trim() === "" && reasoning.trim() === "") {
+        const items =
+          existingAssistant && existingAssistant.text.trim() === "" && existingAssistant.reasoning.trim() === "" && !existingAssistant.memoryCitations?.length
+            ? s.items.filter((it) => !(it.kind === "assistant" && it.id === existingAssistant.id))
+            : s.items;
+        return { ...s, items, live: undefined, currentAssistant: undefined };
+      }
       const { items, id, seq } = ensureAssistant(s);
       const next = items.map((it) =>
         it.kind === "assistant" && it.id === id
@@ -558,8 +591,8 @@ function applyEvent(s: State, e: WireEvent): State {
               const memoryCitations = asArray<MemoryCitation>(e.memoryCitations ?? it.memoryCitations);
               return {
                 ...it,
-                text: e.text ?? s.live?.text ?? it.text,
-                reasoning: e.reasoning ?? s.live?.reasoning ?? it.reasoning,
+                text,
+                reasoning,
                 streaming: false,
                 memoryCitations: memoryCitations.length > 0 ? memoryCitations : undefined,
               };
@@ -812,6 +845,8 @@ export function reducer(s: State, a: Action): State {
       const { items, seq } = historyMessagesToItems(a.messages, "h", s.seq);
       return { ...s, items: compactArchivedToolItems(items), seq, hydrateHistoryLoaded: true, hydratePlaceholderItems: undefined };
     }
+    case "history_checkpoint_turns":
+      return { ...s, items: mergeHistoryCheckpointTurns(s.items, a.messages) };
     case "local_notice": return { ...s, running: false, turnActive: false, seq: s.seq + 1, items: [...s.items, { kind: "notice", id: `n${s.seq}`, level: a.level, text: a.text }] };
     case "clearApproval": return { ...s, approval: undefined, pendingPrompt: false };
     case "clearAsk": return { ...s, ask: undefined, pendingPrompt: false };
@@ -1138,6 +1173,11 @@ export function useController() {
         dispatchTo(targetTabId, { type: "event", e });
       }
       if (e.kind === "turn_done") {
+        if (!e.err) {
+          app.HistoryForTab(targetTabId)
+            .then((messages) => dispatchTo(targetTabId, { type: "history_checkpoint_turns", messages: asArray(messages) }))
+            .catch(() => {});
+        }
         void refreshMetaForTab(targetTabId, dispatchTo);
         app
           .ContextUsageForTab(targetTabId)

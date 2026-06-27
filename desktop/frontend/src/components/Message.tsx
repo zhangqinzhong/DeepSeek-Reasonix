@@ -13,6 +13,7 @@ import { useT } from "../lib/i18n";
 import { Tooltip } from "./Tooltip";
 import { useGSAPCollapse } from "../lib/useGSAPCollapse";
 import { displayReasoningText } from "../lib/reasoningDisplay";
+import { stripMemoryCompilerExecution } from "../lib/memoryCompilerDisplay";
 import type { Item, MessageActionScope } from "../lib/useController";
 import type { CheckpointMeta, MemoryCitation } from "../lib/types";
 
@@ -51,15 +52,6 @@ function parseImSourceMessage(text: string): ImSourceMessage | null {
     chat: meta.chat || meta.chat_type || "",
     text: body,
   };
-}
-
-const MEMORY_COMPILER_EXECUTION_RE = /<memory-compiler-execution>[\s\S]*?<\/memory-compiler-execution>\s*/g;
-
-/** Strips the <memory-compiler-execution> block that the Memory v5 compiler
- *  injects into user turns for model-internal planning. The block is not
- *  user-facing text and should be hidden from the transcript display. */
-function stripMemoryCompilerExecution(text: string): string {
-  return text.replace(MEMORY_COMPILER_EXECUTION_RE, "").trimStart();
 }
 
 function imSourceLabel(source: ImSourceMessage, t: ReturnType<typeof useT>): string {

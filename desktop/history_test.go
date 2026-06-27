@@ -66,6 +66,60 @@ func TestHistoryMessagesIncludeAssistantReasoning(t *testing.T) {
 	}
 }
 
+func TestHistoryMessagesDoNotReplayMemoryCompilerContract(t *testing.T) {
+	raw := historyMemoryCompilerContract(t, "ship the refactor")
+	msgs := []provider.Message{
+		{Role: provider.RoleUser, Content: raw},
+		{Role: provider.RoleAssistant, Content: "done"},
+	}
+
+	got := historyMessages(msgs, control.StripComposePrefixes)
+	if len(got) != 2 {
+		t.Fatalf("history length = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Content != "ship the refactor" {
+		t.Fatalf("visible user content = %q, want source_event", got[0].Content)
+	}
+	if got[0].SubmitText != "" {
+		t.Fatalf("raw Memory v5 contract should not be replay submitText, got %q", got[0].SubmitText)
+	}
+	assertNoHistoryMemoryContract(t, got[0].Content)
+}
+
+func TestHistoryMessagesCarryCheckpointTurnsAcrossHiddenSyntheticUsers(t *testing.T) {
+	msgs := []provider.Message{
+		{Role: provider.RoleSystem, Content: "sys"},
+		{Role: provider.RoleUser, Content: "first visible"},
+		{Role: provider.RoleAssistant, Content: "first answer"},
+		{Role: provider.RoleUser, Content: "Continue pursuing the active goal. If it is complete, provide the concise final result."},
+		{Role: provider.RoleAssistant, Content: "hidden continuation"},
+		{Role: provider.RoleUser, Content: "second visible"},
+		{Role: provider.RoleAssistant, Content: "second answer"},
+	}
+
+	got := historyMessagesWithPlannerDisplays(
+		msgs,
+		func(content string) string { return content },
+		nil,
+		map[int]int{1: 0, 5: 2},
+	)
+	var users []HistoryMessage
+	for _, msg := range got {
+		if msg.Role == "user" {
+			users = append(users, msg)
+		}
+	}
+	if len(users) != 2 {
+		t.Fatalf("visible users = %d, want 2: %+v", len(users), got)
+	}
+	if users[0].CheckpointTurn == nil || *users[0].CheckpointTurn != 0 {
+		t.Fatalf("first checkpoint turn = %v, want 0", users[0].CheckpointTurn)
+	}
+	if users[1].CheckpointTurn == nil || *users[1].CheckpointTurn != 2 {
+		t.Fatalf("second checkpoint turn = %v, want 2", users[1].CheckpointTurn)
+	}
+}
+
 func TestHistoryForTabRestoresPlannerDisplayAfterReload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
@@ -125,6 +179,59 @@ func TestHistoryForTabRestoresPlannerDisplayAfterReload(t *testing.T) {
 	}
 	if got[4].Role != "assistant" || got[4].Content != "executor kept working" {
 		t.Fatalf("executor answer missing after reload: %+v", got[4])
+	}
+}
+
+func TestHistoryForTabUsesPinnedSessionBeforeControllerReady(t *testing.T) {
+	isolateDesktopUserDirs(t)
+	root := globalTabWorkspaceRoot()
+	dir := desktopSessionDir(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	path := filepath.Join(dir, "pending-controller.jsonl")
+	writeHistoryTestSession(t, path, "warm prompt")
+
+	app := NewApp()
+	tab := &WorkspaceTab{
+		ID:            "pending",
+		Scope:         "global",
+		WorkspaceRoot: root,
+		SessionPath:   path,
+		Ready:         false,
+		disabledMCP:   map[string]ServerView{},
+	}
+	app.tabs[tab.ID] = tab
+	app.tabOrder = []string{tab.ID}
+	app.activeTabID = tab.ID
+
+	got := app.HistoryForTab(tab.ID)
+	if len(got) != 1 || got[0].Role != "user" || got[0].Content != "warm prompt" {
+		t.Fatalf("pending controller history = %+v, want warm prompt", got)
+	}
+}
+
+func historyMemoryCompilerContract(t *testing.T, sourceEvent string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"type": "memory_v5_execution_contract",
+		"planner_ir": map[string]any{
+			"source_event": sourceEvent,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "<memory-compiler-execution>\n" + string(body) + "\n</memory-compiler-execution>"
+}
+
+func assertNoHistoryMemoryContract(t *testing.T, text string) {
+	t.Helper()
+	if strings.Contains(text, "<memory-compiler-execution>") ||
+		strings.Contains(text, "</memory-compiler-execution>") ||
+		strings.Contains(text, "memory_v5_execution_contract") ||
+		strings.Contains(text, "planner_ir") {
+		t.Fatalf("history leaked Memory v5 contract content: %q", text)
 	}
 }
 

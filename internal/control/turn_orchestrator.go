@@ -14,26 +14,61 @@ type turnOrchestrator struct {
 	c *Controller
 }
 
+type orchestratedTurn struct {
+	input     string
+	raw       string
+	display   string
+	synthetic bool
+}
+
 func newTurnOrchestrator(c *Controller) *turnOrchestrator {
 	return &turnOrchestrator{c: c}
 }
 
 func (o *turnOrchestrator) runTurnWithRawDisplay(ctx context.Context, input, raw, display string) error {
+	return o.runOrchestratedTurn(ctx, orchestratedTurn{input: input, raw: raw, display: display})
+}
+
+func (o *turnOrchestrator) runSyntheticTurnWithRawDisplay(ctx context.Context, input, raw, display string) error {
+	return o.runOrchestratedTurn(ctx, orchestratedTurn{input: input, raw: raw, display: display, synthetic: true})
+}
+
+func (o *turnOrchestrator) runComposedSyntheticTurn(ctx context.Context, text string) error {
+	c := o.c
+	return c.runner.Run(agent.WithMemoryCompilerSkip(ctx), c.ComposeSynthetic(text))
+}
+
+func (o *turnOrchestrator) runOrchestratedTurn(ctx context.Context, turn orchestratedTurn) error {
 	c := o.c
 	c.maybeSessionStart(ctx)
-	c.maybeAutoPlan(ctx, raw)
+	if !turn.synthetic {
+		c.maybeAutoPlan(ctx, turn.raw)
+	}
 	parentSession := c.parentSessionID()
 	ctx = agent.WithParentSession(ctx, parentSession)
 	ctx = jobs.WithSession(ctx, parentSession)
-	ctx = agent.WithUserImages(ctx, c.inputImages(input))
-	ctx = agent.WithMemoryCompilerSourceInput(ctx, raw)
-	input = c.Compose(input)
+	ctx = agent.WithUserImages(ctx, c.inputImages(turn.input))
+	// Synthetic, controller-injected turns (goal-loop continuation,
+	// plan-approved execution, …) must not be Memory v5-compiled: compiling them
+	// re-injects a contract the model echoes back, which spins the goal loop
+	// forever (#5342, #5329). Only genuine user turns supply a compiler source.
+	if turn.synthetic || IsSyntheticUserMessage(turn.raw) {
+		ctx = agent.WithMemoryCompilerSkip(ctx)
+	} else {
+		ctx = agent.WithMemoryCompilerSourceInput(ctx, turn.raw)
+	}
+	input := c.Compose(turn.input)
 	startMessages := c.messageCount()
 	defer c.snapshotActivityIfChanged(startMessages)
-	defer c.recordDisplayForNewUser(startMessages, display)
-	// Open a checkpoint for this turn before the user message is appended, so the
-	// recorded message boundary precedes it and pre-edit snapshots land here.
-	c.beginCheckpoint(input)
+	defer c.recordDisplayForNewUser(startMessages, turn.display)
+	// Open a checkpoint only for visible user turns before the user message is
+	// appended, so the recorded message boundary precedes it and pre-edit
+	// snapshots land here. Synthetic continuations stay attached to the visible
+	// turn that spawned them; otherwise hidden user-role messages would advance
+	// backend checkpoint turns without a matching frontend turn.
+	if !turn.synthetic {
+		c.beginCheckpoint(input)
+	}
 	if c.guardianSess != nil {
 		c.guardianSess.ResetTurn()
 	}
@@ -90,7 +125,7 @@ func (o *turnOrchestrator) runTurnWithRawDisplay(ctx context.Context, input, raw
 	// later turn (even "continue") falls back to the normal per-tool approval.
 	c.approval.setPlanAutoApprove(true)
 	defer c.approval.setPlanAutoApprove(false)
-	if err := c.runner.Run(ctx, c.ComposeSynthetic(planApprovedMessage)); err != nil {
+	if err := o.runComposedSyntheticTurn(ctx, planApprovedMessage); err != nil {
 		if errors.Is(err, context.Canceled) && c.CancelRequested() {
 			c.stripTurnMessagesAfter(execStart)
 		}
@@ -128,7 +163,7 @@ func (o *turnOrchestrator) continueGoal(ctx context.Context) error {
 			turn = msg
 			c.notice("goal intercept: incomplete todos remain (override with a second [goal:complete])")
 		}
-		if err := o.runTurnWithRawDisplay(ctx, turn, turn, ""); err != nil {
+		if err := o.runSyntheticTurnWithRawDisplay(ctx, turn, turn, ""); err != nil {
 			if ctx.Err() != nil {
 				c.stopGoal(GoalStatusStopped)
 			}

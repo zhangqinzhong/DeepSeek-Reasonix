@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"reasonix/internal/provider"
@@ -97,4 +99,60 @@ func TestSessionPreviewFromMessagesPreservesCompiledFirstTurn(t *testing.T) {
 	if turns != 1 {
 		t.Fatalf("user turns = %d, want 1", turns)
 	}
+}
+
+// Reproduces #5361: the v1.12.0 goal loop (fixed in #5387) accreted nested
+// memory-compiler-execution contracts — each turn's source_event string
+// embedded the previous turn's full <memory-compiler-execution> block. The
+// non-greedy unwrap regex stops at the FIRST </memory-compiler-execution>
+// (which is inside the outer contract's JSON string), so it captures a
+// truncated, invalid JSON body and leaves dangling tag/JSON garbage in the
+// transcript ("一堆字符串"). Existing corrupted sessions must still render
+// cleanly, so the display layer must unwrap robustly.
+func TestUserPreviewTextUnwrapsNestedCompilerContracts(t *testing.T) {
+	// Deeply accreted contract (a long goal loop re-compiled the echoed contract
+	// many times). Two unwrap passes are not enough for N levels.
+	deep := "fix the login bug"
+	for range 6 {
+		deep = mcContract(t, "follow-up step\n"+deep)
+	}
+	assertNoContractLeak(t, UserPreviewText(deep), "follow-up step")
+
+	// A dangling / truncated block (streaming cut, or the model echoing a partial
+	// contract) has no closing tag, so the strict regex never matches it.
+	partial := "do the thing\n<memory-compiler-execution>\n{\"planner_ir\":{\"source_event\":\"do the thing\"," + strings.Repeat("x", 40)
+	assertNoContractLeak(t, UserPreviewText(partial), "do the thing")
+}
+
+func assertNoContractLeak(t *testing.T, got, want string) {
+	t.Helper()
+	if strings.Contains(got, "<memory-compiler-execution>") || strings.Contains(got, "</memory-compiler-execution>") {
+		t.Fatalf("preview leaked a contract tag (raw JSON shown to the user):\n%q", got)
+	}
+	if strings.Contains(got, "planner_ir") || strings.Contains(got, "memory_v5_execution_contract") {
+		t.Fatalf("preview leaked contract JSON:\n%q", got)
+	}
+	if !strings.Contains(got, want) {
+		t.Fatalf("preview lost the user's actual text %q, got:\n%q", want, got)
+	}
+}
+
+// mcContract builds a <memory-compiler-execution> block whose
+// planner_ir.source_event is the given text, matching the real contract shape.
+func mcContract(t *testing.T, sourceEvent string) string {
+	t.Helper()
+	body, err := json.Marshal(struct {
+		Type      string `json:"type"`
+		PlannerIR struct {
+			Version     int    `json:"version"`
+			SourceEvent string `json:"source_event"`
+		} `json:"planner_ir"`
+	}{Type: "memory_v5_execution_contract", PlannerIR: struct {
+		Version     int    `json:"version"`
+		SourceEvent string `json:"source_event"`
+	}{Version: 5, SourceEvent: sourceEvent}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "<memory-compiler-execution>\n" + string(body) + "\n</memory-compiler-execution>"
 }

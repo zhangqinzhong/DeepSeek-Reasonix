@@ -1110,7 +1110,7 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl control.Sessi
 	oldSink := tab.sink
 	if oldSink != nil {
 		oldSink.tabID = detachedRuntimeTabID(oldPath)
-		oldSink.ctx = nil
+		oldSink.clearContext()
 	}
 	if oldCtrl.RuntimeStatus().Cancellable {
 		oldCtrl.Cancel()
@@ -1150,7 +1150,7 @@ func (a *App) clearActiveSessionRuntime(tab *WorkspaceTab, oldCtrl control.Sessi
 		}
 		if oldSink != nil {
 			oldSink.tabID = tab.ID
-			oldSink.ctx = a.ctx
+			oldSink.setContext(a.ctx)
 		}
 		return err
 	}
@@ -1871,7 +1871,7 @@ func tabMatchesSession(tab *WorkspaceTab, dir, sessionPath string) bool {
 func (a *App) prepareRemovedSessionRuntimes(removed []removedSessionRuntime) error {
 	for _, item := range removed {
 		if item.sink != nil {
-			item.sink.ctx = nil
+			item.sink.clearContext()
 		}
 		if item.ctrl == nil {
 			continue
@@ -3060,6 +3060,7 @@ type HistoryMessage struct {
 	Role               string                    `json:"role"`
 	Content            string                    `json:"content"`
 	SubmitText         string                    `json:"submitText,omitempty"`
+	CheckpointTurn     *int                      `json:"checkpointTurn,omitempty"`
 	Reasoning          string                    `json:"reasoning,omitempty"`
 	MemoryCitations    []provider.MemoryCitation `json:"memoryCitations,omitempty"`
 	Level              string                    `json:"level,omitempty"`
@@ -3093,27 +3094,49 @@ func (a *App) History() []HistoryMessage {
 }
 
 func (a *App) HistoryForTab(tabID string) []HistoryMessage {
-	ctrl := a.ctrlByTabID(tabID)
+	a.mu.RLock()
+	tab := a.tabByIDLocked(tabID)
+	var ctrl control.SessionAPI
+	var sessionDir, sessionPath string
+	if tab != nil {
+		ctrl = tab.Ctrl
+		sessionDir = tabSessionDir(tab)
+		sessionPath = tab.currentSessionPath()
+	}
+	a.mu.RUnlock()
 	if ctrl == nil {
-		return []HistoryMessage{}
+		if strings.TrimSpace(sessionPath) == "" {
+			return []HistoryMessage{}
+		}
+		messages, err := previewSessionMessages(sessionDir, sessionPath)
+		if err != nil {
+			return []HistoryMessage{}
+		}
+		return messages
 	}
 	msgs := ctrl.History()
 	dir := controllerSessionDir(ctrl)
 	path := ctrl.SessionPath()
-	return historyMessagesWithPlannerDisplays(msgs, sessionDisplayResolver(dir, path), sessionPlannerDisplayTurns(dir, path))
+	return historyMessagesWithPlannerDisplays(
+		msgs,
+		sessionDisplayResolver(dir, path),
+		sessionPlannerDisplayTurns(dir, path),
+		ctrl.CheckpointTurnsByMessageIndex(),
+	)
 }
 
 func historyMessages(msgs []provider.Message, resolveUserContent func(string) string) []HistoryMessage {
-	return historyMessagesWithPlannerDisplays(msgs, resolveUserContent, nil)
+	return historyMessagesWithPlannerDisplays(msgs, resolveUserContent, nil, nil)
 }
 
-func historyMessagesWithPlannerDisplays(msgs []provider.Message, resolveUserContent func(string) string, plannerTurns []plannerDisplayTurn) []HistoryMessage {
+func historyMessagesWithPlannerDisplays(msgs []provider.Message, resolveUserContent func(string) string, plannerTurns []plannerDisplayTurn, checkpointTurns map[int]int) []HistoryMessage {
 	out := make([]HistoryMessage, 0, len(msgs))
 	replayedTodoArgs := historyTodoArgsWithCompleteSteps(msgs)
 	toolResults := historyToolResultsByID(msgs)
 	plannerByUserHash := plannerTurnsByUserHash(plannerTurns)
-	for _, m := range msgs {
+	for index, m := range msgs {
 		content := m.Content
+		var checkpointTurn *int
 		if m.Role == provider.RoleUser {
 			// Mid-turn steer messages are persisted in the session so they
 			// survive tab switches. They are surfaced as a notice (↪ text)
@@ -3129,16 +3152,20 @@ func historyMessagesWithPlannerDisplays(msgs []provider.Message, resolveUserCont
 			if control.IsSyntheticUserMessage(content) {
 				continue
 			}
+			if turn, ok := checkpointTurns[index]; ok {
+				turnCopy := turn
+				checkpointTurn = &turnCopy
+			}
 		}
 		reasoning := ""
 		if m.Role == provider.RoleAssistant {
 			reasoning = m.ReasoningContent
 		}
-		hm := HistoryMessage{Role: string(m.Role), Content: content, Reasoning: reasoning}
+		hm := HistoryMessage{Role: string(m.Role), Content: content, CheckpointTurn: checkpointTurn, Reasoning: reasoning}
 		if m.Role == provider.RoleAssistant && len(m.MemoryCitations) > 0 {
 			hm.MemoryCitations = append([]provider.MemoryCitation(nil), m.MemoryCitations...)
 		}
-		if m.Role == provider.RoleUser && content != m.Content {
+		if m.Role == provider.RoleUser && content != m.Content && !agent.ContainsMemoryCompilerExecution(m.Content) {
 			hm.SubmitText = m.Content
 		}
 		if m.Role == provider.RoleAssistant && len(m.ToolCalls) > 0 {
@@ -3510,6 +3537,7 @@ func previewSessionMessages(sessionDir, path string) ([]HistoryMessage, error) {
 		loaded.Snapshot(),
 		sessionDisplayResolver(sessionDir, sessionPath),
 		sessionPlannerDisplayTurns(sessionDir, sessionPath),
+		nil,
 	), nil
 }
 
@@ -3795,6 +3823,7 @@ type Meta struct {
 	WorkspaceName     string `json:"workspaceName,omitempty"`
 	WorkspacePath     string `json:"workspacePath,omitempty"`
 	GitBranch         string `json:"gitBranch,omitempty"`
+	ImageInputEnabled bool   `json:"imageInputEnabled"`
 	AutoApproveTools  bool   `json:"autoApproveTools"`
 	Bypass            bool   `json:"bypass"` // legacy JSON key for YOLO/full-access tool auto-approval
 	CollaborationMode string `json:"collaborationMode"`
@@ -3809,6 +3838,26 @@ type Meta struct {
 // subscribes to.
 func (a *App) Meta() Meta {
 	return a.MetaForTab("")
+}
+
+func (a *App) imageInputEnabledForTab(tabID string) bool {
+	var tab *WorkspaceTab
+	a.mu.RLock()
+	tab = a.tabByIDLocked(tabID)
+	a.mu.RUnlock()
+	if tab == nil {
+		return false
+	}
+	ref := tab.model
+	cfg, err := config.LoadForRoot(tab.WorkspaceRoot)
+	if err == nil && ref == "" {
+		ref = cfg.DefaultModel
+	}
+	if err != nil || ref == "" {
+		return false
+	}
+	entry, ok := cfg.ResolveModel(ref)
+	return ok && config.EffectiveVision(entry)
 }
 
 func (a *App) MetaForTab(tabID string) Meta {
@@ -3836,6 +3885,7 @@ func (a *App) MetaForTab(tabID string) Meta {
 		WorkspaceName:     tabWorkspaceName(tab, cwd),
 		WorkspacePath:     cwd,
 		GitBranch:         workspaceGitBranch(cwd),
+		ImageInputEnabled: a.imageInputEnabledForTab(tabID),
 		AutoApproveTools:  autoApproveTools,
 		Bypass:            autoApproveTools,
 		CollaborationMode: collaborationMode,
