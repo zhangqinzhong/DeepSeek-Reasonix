@@ -113,7 +113,7 @@ func (b bash) resolved() sandbox.Shell {
 }
 
 func (bash) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"},"run_in_background":{"type":"boolean","description":"Run detached: returns a job id immediately and keeps running across turns (no foreground timeout). Read new output with bash_output, wait with wait, stop it with kill_shell. Use for long-running commands like servers, watchers, or builds you don't need to block on."},"preserve_background_processes":{"type":"boolean","description":"After the shell command exits normally, keep any process-group members it intentionally left behind. Use only for deliberate daemonization, such as nohup/disown/setsid; cancellation and timeouts still kill the process group."}},"required":["command"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"},"run_in_background":{"type":"boolean","description":"Run detached: returns a job id immediately and keeps running across turns (no foreground timeout). Read new output with bash_output, wait with wait, stop it with kill_shell. Use for long-running commands like servers, watchers, or builds you don't need to block on."},"preserve_background_processes":{"type":"boolean","description":"After the shell command exits normally, keep any process-group members it intentionally left behind. Use only for deliberate daemonization, browser/GUI/session launchers such as playwright-cli open, or nohup/disown/setsid; cancellation and timeouts still kill the process group."}},"required":["command"]}`)
 }
 
 // ReadOnly is false: bash's effect cannot be inferred from args (rm, curl,
@@ -171,7 +171,7 @@ func (b bash) Execute(ctx context.Context, args json.RawMessage) (string, error)
 			if shouldReapAfterRun(jobCtx, sh, p.Command, p.PreserveBackgroundProcesses) {
 				reapShellProcess(cmd, tracked) // reap process-group stragglers the job left running (#3702)
 			}
-			return "", runErr
+			return "", normalizeBashRunError(jobCtx, runErr, p.PreserveBackgroundProcesses)
 		})
 		return fmt.Sprintf("Started background job %q. It keeps running across turns; read new output with bash_output(job_id=%q), wait for it with wait, or stop it with kill_shell(job_id=%q).", job.ID, job.ID, job.ID), nil
 	}
@@ -203,6 +203,7 @@ func (b bash) Execute(ctx context.Context, args json.RawMessage) (string, error)
 	if shouldReapAfterRun(runCtx, sh, p.Command, p.PreserveBackgroundProcesses) {
 		reapShellProcess(cmd, tracked)
 	}
+	err = normalizeBashRunError(runCtx, err, p.PreserveBackgroundProcesses)
 	out := buf.String()
 
 	if errors.Is(context.Cause(runCtx), errBashTimeout) {
@@ -213,6 +214,13 @@ func (b bash) Execute(ctx context.Context, args json.RawMessage) (string, error)
 		return out, fmt.Errorf("command exited: %w", err)
 	}
 	return out, nil
+}
+
+func normalizeBashRunError(ctx context.Context, err error, preserveBackgroundProcesses bool) error {
+	if preserveBackgroundProcesses && ctx.Err() == nil && errors.Is(err, exec.ErrWaitDelay) {
+		return nil
+	}
+	return err
 }
 
 func shouldReapAfterRun(ctx context.Context, sh sandbox.Shell, command string, preserveBackgroundProcesses bool) bool {
